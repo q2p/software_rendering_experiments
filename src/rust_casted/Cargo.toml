@@ -1,0 +1,29 @@
+[package]
+name = "js_nano_r"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3
+# opt-level = 'z'
+debug = false
+# debug = true
+rpath = false
+debug-assertions = false
+# opt-level = 0
+# debug = true
+# rpath = true
+# debug-assertions = true
+lto = true
+codegen-units = 1
+panic = 'abort'
+incremental = false
+overflow-checks = false
+
+#![no_std]
+[dependencies]
+tiny_lib = "0.0.1"

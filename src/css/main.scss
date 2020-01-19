@@ -1,0 +1,34 @@
+@charset "UTF-8";
+
+// $backgroundColor: #a0f;
+$backgroundColor: #333;
+
+* {
+	padding: 0;
+	margin: 0;
+	border: none;
+	outline: none;
+}
+
+html {
+	background-color: $backgroundColor;
+	user-select: none;
+	width: 100%;
+	height: 100%;
+}
+body {
+	width: 100%;
+	height: 100%;
+
+	display: flex;
+	flex-wrap: nowrap;
+	align-content: center;
+	align-items: center;
+	justify-content: center;
+	justify-items: center;
+}
+canvas {
+	cursor: none;
+	image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}

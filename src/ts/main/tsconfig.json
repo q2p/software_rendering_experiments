@@ -1,0 +1,18 @@
+{
+	"compileOnSave": true,
+	"compilerOptions": {
+		"allowJs": true,
+		"target": "es2018",
+		"module": "system",
+		"noImplicitAny": true,
+		"removeComments": true,
+		"preserveConstEnums": true,
+		"outFile": "../../../dist/main.js",
+		"sourceMap": false
+	},
+	"files": [
+		"./wasm.d.ts",
+		"./hex.ts",
+		"./main.ts"
+	]
+}
