@@ -34,7 +34,7 @@
 
 // #include <stdint.h>
 
-const HITS_ARRAY_LIMIT:usize = 16;
+const HITS_ARRAY_LIMIT:u8 = 16;
 
 const CAMERA_RESOLUTION_X:u16 = 320; // 20
 const CAMERA_RESOLUTION_Y:u16 = 200; // 15
@@ -43,7 +43,7 @@ const halfResY:u16 = CAMERA_RESOLUTION_Y / 2;
 
 use crate::profile;
 use std::fmt::{Display, Formatter, Error};
-use crate::util::NonZeroSignum;
+use tiny_lib::util::NonZeroSignum;
 use crate::rcl_switch::*;
 use crate::rcl_general::RCL_General;
 
@@ -78,9 +78,9 @@ const RCL_RECTILINEAR:bool = true; // Whether to use rectilinear perspective (no
 
 const RCL_TEXTURE_VERTICAL_STRETCH:u8 = 1; // Whether textures should be stretched to wall height (possibly slightly slower if on).
 
-const RCL_COMPUTE_FLOOR_DEPTH:u8 = 1; // Whether depth should be computed for floor pixels - turns this off if not needed.
+const RCL_COMPUTE_FLOOR_DEPTH:bool = true; // Whether depth should be computed for floor pixels - turns this off if not needed.
 
-const  RCL_COMPUTE_CEILING_DEPTH:u8 = 1; // As RCL_COMPUTE_FLOOR_DEPTH but for ceiling.
+const  RCL_COMPUTE_CEILING_DEPTH:bool = true; // As RCL_COMPUTE_FLOOR_DEPTH but for ceiling.
 
 const RCL_ROLL_TEXTURE_COORDS:bool = true; // Says whether rolling doors should also roll the texture coordinates along (mostly desired for doors).
 
@@ -181,10 +181,6 @@ impl RCL_Vector2D {
 		} else if RCL_USE_DIST_APPROX == 1 {
 			// more accurate approximation
 
-			let a;
-			let b;
-			let result;
-
 			// dx = ((dx < 0) * 2 - 1) * dx;
 			// dy = ((dy < 0) * 2 - 1) * dy;
 			// dx = if dx < 0 { 1 } else { -1 } * dx;
@@ -192,6 +188,8 @@ impl RCL_Vector2D {
 			if dx > 0 { dx *= -1; }
 			if dy > 0 { dy *= -1; }
 
+			let a;
+			let b;
 			if dx < dy {
 				a = dy;
 				b = dx;
@@ -200,7 +198,7 @@ impl RCL_Vector2D {
 				b = dy;
 			}
 
-			result = a + (44 * b) / 102;
+			let mut result = a + (44 * b) / 102;
 
 			if a < (b << 4) {
 				result -= (5 * a) / 128;
@@ -221,6 +219,7 @@ impl Display for RCL_Vector2D {
 	}
 }
 
+#[derive(Copy, Clone)]
 struct RCL_Ray {
   start:RCL_Vector2D,
   direction:RCL_Vector2D,
@@ -231,12 +230,12 @@ impl Display for RCL_Ray {
 	}
 }
 
-#[derive(Clone)]
-struct RCL_HitResult {
+#[derive(Copy, Clone)]
+pub struct RCL_HitResult {
 	/// Distance to the hit position, or -1 if no collision happened. If RCL_RECTILINEAR != 0, then the distance is perpendicular to the projection plane (fish eye correction), otherwise it is the straight distance to the ray start position.
   distance:RCL_Unit,
 	/// Direction of hit. The convention for angle units is explained above.
-  direction:u8,
+  pub direction:u8,
 	/// Normalized (0 to RCL_UNITS_PER_SQUARE - 1) texture coordinate (horizontal).
   textureCoord:RCL_Unit,
 	/// Collided square coordinates.
@@ -246,7 +245,7 @@ struct RCL_HitResult {
 	/// Value returned by array function (most often this will be the floor height).
   arrayValue:RCL_Unit,
 	/// Integer identifying type of square (number returned by type function, e.g. texture index).
-  type_:RCL_Unit,
+	pub type_:RCL_Unit,
 	/// Holds value of door roll.
   doorRoll:RCL_Unit,
 }
@@ -264,6 +263,21 @@ impl RCL_HitResult {
 			doorRoll: 0
 		}
 	}
+
+	/// Fills a RCL_HitResult struct with info for a hit at infinity.
+	#[inline]
+	fn _RCL_makeInfiniteHit(&mut self, ray:&RCL_Ray) {
+		self.distance = RCL_UNITS_PER_SQUARE * RCL_UNITS_PER_SQUARE;
+		// ^ horizon is at infinity, but we can't use too big infinity (RCL_INFINITY) because it would overflow in the following mult.
+		self.position.x = (ray.direction.x * self.distance) / RCL_UNITS_PER_SQUARE;
+		self.position.y = (ray.direction.y * self.distance) / RCL_UNITS_PER_SQUARE;
+
+		self.direction = 0;
+		self.textureCoord = 0;
+		self.arrayValue = 0;
+		self.doorRoll = 0;
+		self.type_ = 0;
+	}
 }
 impl Display for RCL_HitResult {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
@@ -276,10 +290,12 @@ impl Display for RCL_HitResult {
 	}
 }
 
-pub(crate) struct RCL_Camera {
+#[derive(Clone)]
+pub struct RCL_Camera {
   pub position:RCL_Vector2D,
   pub direction:RCL_Unit,
   pub resolution:RCL_Vector2D,
+	// from -camera.resolution.y to +camera.resolution.y
   pub shear:i16, /// Shear offset in pixels (0 => no shear), can simulate looking up/down.
 	pub height:RCL_Unit,
 }
@@ -329,6 +345,22 @@ pub struct RCL_PixelInfo {
 	pub texCoords:RCL_Vector2D,
 }
 
+impl RCL_PixelInfo {
+	fn zeroed() -> RCL_PixelInfo {
+		RCL_PixelInfo {
+			position: RCL_Vector2D::ZERO,
+			isWall: false,
+			isFloor: false,
+			isHorizon: false,
+			depth: 0,
+			wallHeight: 0,
+			height: 0,
+			hit: RCL_HitResult::zeroed(),
+			texCoords: RCL_Vector2D::ZERO,
+		}
+	}
+}
+
 impl Display for RCL_PixelInfo {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
 		writeln!(f, "pixel:")?;
@@ -376,8 +408,8 @@ pub(crate) type RCL_ArrayFunction = fn(x:i16, y:i16) -> RCL_Unit;
   This function should be as fast as possible as it will typically be called
   very often.
 */
-pub(crate) type RCL_PixelFunction = fn(general:&mut RCL_General, info:&mut RCL_PixelInfo);
-type RCL_ColumnFunction = fn(hits:&[RCL_HitResult], hitCount:u16, x:u16, ray:RCL_Ray);
+pub type RCL_PixelFunction = fn(general:&mut RCL_General, info:&RCL_PixelInfo);
+type RCL_ColumnFunction = fn(&mut RCL_Renderer_Global, general:&mut RCL_General, hits:&[RCL_HitResult], x:u16, ray:RCL_Ray);
 
 //=============================================================================
 // privates
@@ -396,20 +428,20 @@ const CLT_SIZE:usize =
 	} else {
 		0
 	};
-const cosLUT:[RCL_Unit; CLT_SIZE] =
+const cosLUT:&'static [RCL_Unit] =
 	if RCL_USE_COS_LUT == 1 {
 		if RCL_RAYCAST_TINY {
-			[ 16,14,11,6,0,-6,-11,-14,-15,-14,-11,-6,0,6,11,14 ]
+			&[ 16,14,11,6,0,-6,-11,-14,-15,-14,-11,-6,0,6,11,14 ]
 		} else {
-			[
-				1024,1019,1004,979,946,903,851,791,724,649,568,482,391,297,199,100,0,-100,
-				-199,-297,-391,-482,-568,-649,-724,-791,-851,-903,-946,-979,-1004,-1019,
-				-1023,-1019,-1004,-979,-946,-903,-851,-791,-724,-649,-568,-482,-391,-297,
-				-199,-100,0,100,199,297,391,482,568,649,724,791,851,903,946,979,1004,1019
+			&[
+				 1024, 1019, 1004, 979, 946, 903, 851, 791, 724, 649, 568, 482,  391,  297, 199, 100, 0,-100,
+				- 199,- 297,- 391,-482,-568,-649,-724,-791,-851,-903,-946,-979,-1004,-1019,
+				-1023,-1019,-1004,-979,-946,-903,-851,-791,-724,-649,-568,-482,- 391,- 297,
+				- 199,- 100,    0, 100, 199, 297, 391, 482, 568, 649, 724, 791,  851,  903, 946, 979,1004,1019
 			]
 		}
 	} else if RCL_USE_COS_LUT == 2 {
-		[
+		&[
 			1024,1022,1019,1012,1004,993,979,964,946,925,903,878,851,822,791,758,724,
 			687,649,609,568,526,482,437,391,344,297,248,199,150,100,50,0,-50,-100,-150,
 			-199,-248,-297,-344,-391,-437,-482,-526,-568,-609,-649,-687,-724,-758,-791,
@@ -420,25 +452,27 @@ const cosLUT:[RCL_Unit; CLT_SIZE] =
 			758,791,822,851,878,903,925,946,964,979,993,1004,1012,1019,1022
 		]
 	} else {
-		[]
+		&[]
 	};
 
-pub(crate) fn RCL_clamp(value:RCL_Unit, valueMin:RCL_Unit, valueMax:RCL_Unit) -> RCL_Unit {
+pub fn RCL_clamp(value:RCL_Unit, valueMin:RCL_Unit, valueMax:RCL_Unit) -> RCL_Unit {
 	unsafe { profile::RCL_clamp.call(); }
+
+	debug_assert!(valueMin <= valueMax);
 
 	if value >= valueMin {
 		if value <= valueMax {
-			return value;
+			value
 		} else {
-			return valueMax;
+			valueMax
 		}
 	} else {
-		return valueMin;
+		valueMin
 	}
 }
 
 #[inline]
-pub(crate) fn RCL_absVal(value:RCL_Unit) -> RCL_Unit {
+pub fn RCL_absVal(value:RCL_Unit) -> RCL_Unit {
 	unsafe { profile::RCL_absVal.call(); }
 	// return value * (((value >= 0) << 1) - 1);
 	// TODO:
@@ -447,7 +481,7 @@ pub(crate) fn RCL_absVal(value:RCL_Unit) -> RCL_Unit {
 
 /// Like mod, but behaves differently for negative values.
 #[inline]
-pub(crate) fn RCL_wrap(value:RCL_Unit, mod_:RCL_Unit) -> RCL_Unit {
+pub fn RCL_wrap(value:RCL_Unit, mod_:RCL_Unit) -> RCL_Unit {
 	unsafe { profile::RCL_wrap.call(); }
 	let cmp:RCL_Unit = if value < 0 { 1 } else { 0 };
 	return cmp * mod_ + (value % mod_) - cmp;
@@ -508,8 +542,8 @@ fn RCL_sinInt(input:RCL_Unit) -> RCL_Unit {
 	return RCL_cosInt(input - RCL_UNITS_PER_SQUARE / 4);
 }
 
-pub(crate) fn RCL_angleToDirection(angle:RCL_Unit) -> RCL_Vector2D {
-	profile::RCL_angleToDirection.call();
+pub fn RCL_angleToDirection(angle:RCL_Unit) -> RCL_Vector2D {
+	unsafe { profile::RCL_angleToDirection.call() };
 
 	return RCL_Vector2D {
 		x:      RCL_cosInt(angle),
@@ -518,7 +552,7 @@ pub(crate) fn RCL_angleToDirection(angle:RCL_Unit) -> RCL_Vector2D {
 }
 
 fn RCL_sqrtInt(value:RCL_Unit) -> RCL_Unit_unsigned {
-	profile::RCL_sqrtInt.call();
+	unsafe { profile::RCL_sqrtInt.call() };
 
 	let mut result:RCL_Unit_unsigned = 0;
 	let mut a:RCL_Unit_unsigned = value as RCL_Unit_unsigned;
@@ -578,23 +612,8 @@ fn RCL_perspectiveScaleInverse(originalSize:RCL_Unit, scaledSize:RCL_Unit) -> RC
 	}
 }
 
-/// Fills a RCL_HitResult struct with info for a hit at infinity.
-#[inline]
-fn _RCL_makeInfiniteHit(hit:&mut RCL_HitResult, ray:&mut RCL_Ray) {
-	hit.distance = RCL_UNITS_PER_SQUARE * RCL_UNITS_PER_SQUARE;
-	// ^ horizon is at infinity, but we can't use too big infinity (RCL_INFINITY) because it would overflow in the following mult.
-	hit.position.x = (ray.direction.x * hit.distance) / RCL_UNITS_PER_SQUARE;
-	hit.position.y = (ray.direction.y * hit.distance) / RCL_UNITS_PER_SQUARE;
-
-	hit.direction = 0;
-	hit.textureCoord = 0;
-	hit.arrayValue = 0;
-	hit.doorRoll = 0;
-	hit.type_ = 0;
-}
-
 // Maps a single point in the world to the screen (2D position + depth).
-pub fn RCL_mapToScreen(worldPosition:RCL_Vector2D, height:RCL_Unit, camera:RCL_Camera) -> RCL_PixelInfo {
+pub fn RCL_mapToScreen(worldPosition:RCL_Vector2D, height:RCL_Unit, camera:&RCL_Camera) -> RCL_PixelInfo {
 	let mut result:RCL_PixelInfo = RCL_PixelInfo {
 		position: RCL_Vector2D::ZERO,
 		isWall: false,
@@ -626,9 +645,9 @@ pub fn RCL_mapToScreen(worldPosition:RCL_Vector2D, height:RCL_Unit, camera:RCL_C
 
 	result.depth = toPoint.x;
 
-	result.position.x = middleColumn + (-1 * toPoint.y * middleColumn) / RCL_nonZero(result.depth);
+	result.position.x = middleColumn as RCL_Unit + (-1 * toPoint.y * middleColumn as RCL_Unit) / RCL_nonZero(result.depth);
 
-	result.position.y = halfResY - (CAMERA_RESOLUTION_Y * RCL_perspectiveScale(height - camera.height,result.depth)) / RCL_UNITS_PER_SQUARE + camera.shear;
+	result.position.y = halfResY as RCL_Unit - (CAMERA_RESOLUTION_Y as RCL_Unit * RCL_perspectiveScale(height - camera.height,result.depth)) / RCL_UNITS_PER_SQUARE + camera.shear as RCL_Unit;
 
 	return result;
 }
@@ -639,17 +658,16 @@ pub struct RCL_Renderer_Global {
 	_RCL_horizontalDepthStep:RCL_Unit,
 	_RCL_startFloorHeight:RCL_Unit,
 	_RCL_startCeil_Height:RCL_Unit,
-	_RCL_middleRow:RCL_Unit,
-	_RCL_fHorizontalDepthStart:RCL_Unit,
-	_RCL_cHorizontalDepthStart:RCL_Unit,
+	_RCL_middleRow:i16,
+	_RCL_fHorizontalDepthStart:i16,
+	_RCL_cHorizontalDepthStart:i16,
 	_RCL_cameraHeightScreen:i16,
 	_RCL_rollFunction:Option<RCL_ArrayFunction>, // says door rolling
-	_RCL_ceilFunction:Option<RCL_ArrayFunction>,
 	_RCL_floorPixelDistances:Option<[RCL_Unit; CAMERA_RESOLUTION_Y as usize]>,
 }
 
 impl RCL_Renderer_Global {
-	pub fn new() -> RCL_Renderer_Global {
+	pub const fn new() -> RCL_Renderer_Global {
 		RCL_Renderer_Global {
 			_RCL_camera: RCL_Camera {
 				position: RCL_Vector2D::ZERO,
@@ -666,7 +684,6 @@ impl RCL_Renderer_Global {
 			_RCL_cHorizontalDepthStart: 0,
 			_RCL_cameraHeightScreen: 0,
 			_RCL_rollFunction: None,
-			_RCL_ceilFunction: None,
 			_RCL_floorPixelDistances: None,
 		}
 	}
@@ -697,7 +714,7 @@ impl RCL_Renderer_Global {
 		arrayFunc:RCL_ArrayFunction,
 		typeFunc:Option<RCL_ArrayFunction>,
 		hitResults:&mut [RCL_HitResult],
-		hitResultsLen:&mut u16,
+		hitResultsLen:&mut u8,
 		constraints:RCL_RayConstraints
 	) {
 		unsafe { profile::RCL_castRayMultiHit.call(); }
@@ -705,21 +722,18 @@ impl RCL_Renderer_Global {
 		assert!(!hitResults.is_empty()); // Should prevent runtime checking
 
 		let currentPos = ray.start;
-		let currentSquare = RCL_Vector2D {
+		let mut currentSquare = RCL_Vector2D {
 			x: RCL_divRoundDown(ray.start.x,RCL_UNITS_PER_SQUARE),
 			y: RCL_divRoundDown(ray.start.y,RCL_UNITS_PER_SQUARE),
 		};
 
 		*hitResultsLen = 0;
 
-		let squareType:RCL_Unit = arrayFunc(currentSquare.x as i16, currentSquare.y as i16);
+		let mut squareType:RCL_Unit = arrayFunc(currentSquare.x as i16, currentSquare.y as i16);
 
 		// DDA variables
-		let nextSideDist = RCL_Vector2D { // dist. from start to the next side in given axis
-			x: 0,
-			y: 0,
-		};
-		let step:RCL_Vector2D; // -1 or 1 for each axis
+		let mut nextSideDist = RCL_Vector2D::ZERO; // dist. from start to the next side in given axis
+		let mut step = RCL_Vector2D::ZERO; // -1 or 1 for each axis
 		let mut stepHorizontal:bool = false; // whether the last step was hor. or vert.
 
 		let dirVecLengthNorm = ray.direction.len() * RCL_UNITS_PER_SQUARE;
@@ -761,7 +775,7 @@ impl RCL_Renderer_Global {
 			if RCL_unlikely(currentType != squareType) {
 				// collision
 
-				let mut h:RCL_HitResult;
+				let mut h = RCL_HitResult::zeroed();
 
 				h.arrayValue = currentType;
 				h.doorRoll = 0;
@@ -871,7 +885,7 @@ impl RCL_Renderer_Global {
 		unsafe { profile::RCL_castRay.call(); }
 
 		let mut result = [RCL_HitResult::zeroed()];
-		let mut RCL_len:u16;
+		let mut RCL_len = 0;
 		let c = RCL_RayConstraints {
 			maxSteps: 1000,
 			maxHits: 1,
@@ -890,11 +904,10 @@ impl RCL_Renderer_Global {
 
 	/// Casts rays for given camera view and for each hit calls a user provided function.
 	fn RCL_castRaysMultiHit(
-		&mut self, cam:&RCL_Camera,
+		&mut self, general: &mut RCL_General, cam:&RCL_Camera,
 		arrayFunc:RCL_ArrayFunction,
 		typeFunction:Option<RCL_ArrayFunction>,
 		columnFunc:RCL_ColumnFunction,
-		constraints:RCL_RayConstraints
 	) {
 		let dir1 = RCL_angleToDirection(cam.direction - RCL_HORIZONTAL_FOV_HALF);
 		let dir2 = RCL_angleToDirection(cam.direction + RCL_HORIZONTAL_FOV_HALF);
@@ -902,26 +915,28 @@ impl RCL_Renderer_Global {
 		let dX = dir2.x - dir1.x;
 		let dY = dir2.y - dir1.y;
 
-		let hits = [RCL_HitResult::zeroed(); HITS_ARRAY_LIMIT];
-		let hitCount:u16;
+		let mut hits = [RCL_HitResult::zeroed(); HITS_ARRAY_LIMIT as usize];
+		let mut hitCount:u8 = 0;
 
-		let r:RCL_Ray;
-		r.start = cam.position;
+		let mut r = RCL_Ray {
+			start: cam.position,
+			direction: RCL_Vector2D::ZERO,
+		};
 
-		let currentDX:RCL_Unit = 0;
-		let currentDY:RCL_Unit = 0;
+		let mut currentDX:RCL_Unit = 0;
+		let mut currentDY:RCL_Unit = 0;
 
 		for i in 0..CAMERA_RESOLUTION_X {
-			/* Here by linearly interpolating the direction vector its length changes,
-			which in result achieves correcting the fish eye effect (computing
-			perpendicular distance). */
+			// Here by linearly interpolating the direction vector its length changes,
+			// which in result achieves correcting the fish eye effect (computing
+			// perpendicular distance).
 
 			r.direction.x = dir1.x + currentDX / CAMERA_RESOLUTION_X as RCL_Unit;
 			r.direction.y = dir1.y + currentDY / CAMERA_RESOLUTION_Y as RCL_Unit;
 
-			self.RCL_castRayMultiHit(r,arrayFunc,typeFunction,&mut hits,&mut hitCount,constraints);
+			self.RCL_castRayMultiHit(r, arrayFunc,typeFunction,&mut hits,&mut hitCount, general.defaultConstraints);
 
-			columnFunc(&hits,hitCount,i,r);
+			columnFunc(self, general, &hits[0..hitCount as usize], i, r);
 
 			currentDX += dX;
 			currentDY += dY;
@@ -929,15 +944,15 @@ impl RCL_Renderer_Global {
 	}
 
 	/// Helper function that determines intersection with both ceiling and floor.
-	fn _RCL_floorCeilFunction(&mut self, x:i16, y:i16) -> RCL_Unit {
+	fn _RCL_floorCeilFunction(x:i16, y:i16) -> RCL_Unit {
 		let f = floorHeightFunction(x, y);
 
-		match self._RCL_ceilFunction {
-			None => return f,
-			Some(ceilingHeightFunc) => {
-				let c = ceilingHeightFunc(x, y);
+		match ceilingHeightFunc {
+			None => f,
+			Some(chf) => {
+				let c = chf(x, y);
 
-				return if !RCL_RAYCAST_TINY {
+				if !RCL_RAYCAST_TINY {
 					((f & 0x0000ffff) << 16) | (c & 0x0000ffff)
 				} else {
 					((f & 0x00ff) << 8) | (c & 0x00ff)
@@ -946,7 +961,7 @@ impl RCL_Renderer_Global {
 		}
 	}
 
-	fn _floorHeightNotZeroFunction(&mut self, x:i16, y:i16) -> RCL_Unit {
+	fn _floorHeightNotZeroFunction(x:i16, y:i16) -> RCL_Unit {
 		if floorHeightFunction(x, y) == 0 {
 			0
 		} else {
@@ -971,11 +986,11 @@ impl RCL_Renderer_Global {
 	#[inline]
 	fn _RCL_drawHorizontalColumn(
 		&mut self,
-		&mut general:RCL_General,
+		general:&mut RCL_General,
 		yCurrent:i16,
 		yTo:RCL_Unit,
-		limit1:RCL_Unit, // TODO: int16_t?
-		limit2:RCL_Unit,
+		limit1:i16,
+		limit2:i16,
 		verticalOffset:RCL_Unit,
 		increment:NonZeroSignum,
 		computeDepth:bool,
@@ -986,15 +1001,16 @@ impl RCL_Renderer_Global {
 	) -> i16 {
 		_RCL_UNUSED(ray);
 
-		let depthIncrement:RCL_Unit;
-		let dx:RCL_Unit;
-		let dy:RCL_Unit;
+		let mut depthIncrement:RCL_Unit = 0;
+		let mut dx:RCL_Unit = 0;
+		let mut dy:RCL_Unit = 0;
 
 		pixelInfo.isWall = false;
 
-		let limit = RCL_clamp(yTo,limit1,limit2) as i16;
+		let limit = RCL_clamp(yTo,limit1 as RCL_Unit,limit2 as RCL_Unit) as i16;
 
-		let depth:RCL_Unit = 0; // TODO: this is for clamping depth to 0 so that we don't have negative depths, but we should do it more elegantly and efficiently
+		// TODO: this is for clamping depth to 0 so that we don't have negative depths, but we should do it more elegantly and efficiently
+		let mut depth:RCL_Unit = 0;
 
 		_RCL_UNUSED(depth);
 
@@ -1052,11 +1068,11 @@ impl RCL_Renderer_Global {
 	#[inline]
 	fn _RCL_drawWall(
 		general:&mut RCL_General,
-		yCurrent:RCL_Unit,
+		yCurrent:i16,
 		yFrom:RCL_Unit,
 		yTo:RCL_Unit,
 		limit1:i16,
-		limit2:u16,
+		limit2:i16,
 		mut height:RCL_Unit,
 		increment:NonZeroSignum,
 		pixelInfo:&mut RCL_PixelInfo
@@ -1069,11 +1085,11 @@ impl RCL_Renderer_Global {
 
 		let wallLength:RCL_Unit = RCL_nonZero(RCL_absVal(yTo - yFrom - 1));
 
-		let wallPosition:RCL_Unit = RCL_absVal(yFrom - yCurrent) - increment;
+		let wallPosition:RCL_Unit = RCL_absVal(yFrom - yCurrent as RCL_Unit) - increment;
 
 		let heightScaled:RCL_Unit = height * RCL_TEXTURE_INTERPOLATION_SCALE;
 
-		let coordStepScaled:RCL_Unit = if RCL_COMPUTE_WALL_TEXCOORDS {
+		let mut coordStepScaled:RCL_Unit = if RCL_COMPUTE_WALL_TEXCOORDS {
 			if RCL_TEXTURE_VERTICAL_STRETCH == 1 {
 				((RCL_UNITS_PER_SQUARE * RCL_TEXTURE_INTERPOLATION_SCALE) / wallLength)
 			} else {
@@ -1099,11 +1115,11 @@ impl RCL_Renderer_Global {
 			pixelInfo.texCoords.y = RCL_zeroClamp(pixelInfo.texCoords.y);
 		}
 
-		let textureCoordScaled:RCL_Unit = pixelInfo.texCoords.y;
+		let mut textureCoordScaled:RCL_Unit = pixelInfo.texCoords.y;
 
 		let mut i = yCurrent + increment;
 		while if increment.is_negative() { i >= limit } else { i <= limit } { // TODO: is efficient?
-			pixelInfo.position.y = i;
+			pixelInfo.position.y = i as RCL_Unit;
 
 			if RCL_COMPUTE_WALL_TEXCOORDS {
 				pixelInfo.texCoords.y = textureCoordScaled / RCL_TEXTURE_INTERPOLATION_SCALE;
@@ -1118,61 +1134,61 @@ impl RCL_Renderer_Global {
 		return limit;
 	}
 
-	fn _RCL_columnFunctionComplex(&mut self, general:&mut RCL_General, hits:&mut RCL_HitResult, hitCount:u16, x:u16, mut ray:RCL_Ray) {
+	fn _RCL_columnFunctionComplex(&mut self, general:&mut RCL_General, hits:&[RCL_HitResult], x:u16, mut ray:RCL_Ray) {
 		// last written Y position, can never go backwards
-		let mut fPosY = CAMERA_RESOLUTION_Y;
+		let mut fPosY = CAMERA_RESOLUTION_Y as i16;
 		let mut cPosY = -1i16;
 
 		// world coordinates (relative to camera height though)
 		let mut fZ1World = self._RCL_startFloorHeight;
 		let mut cZ1World = self._RCL_startCeil_Height;
 
-		let mut p:RCL_PixelInfo;
-		p.position.x = x;
+		let mut p:RCL_PixelInfo = RCL_PixelInfo::zeroed();
+		p.position.x = x as RCL_Unit;
 		p.height = 0;
 		p.wallHeight = 0;
 		p.texCoords = RCL_Vector2D::ZERO;
 
 		// we'll be simulatenously drawing the floor and the ceiling now
-		for j in 0..=hitCount {
+		for j in 0..=hits.len() {
 			//              ^ "=" add extra iteration for horizon plane
-			let drawingHorizon:bool = j == hitCount;
+			let drawingHorizon:bool = j == hits.len();
 
-			let hit:RCL_HitResult;
-			let distance = 1;
+			let mut hit = RCL_HitResult::zeroed();
+			let mut distance = 1;
 
-			let fWallHeight = 0;
-			let cWallHeight = 0;
-			let fZ2World = 0;
-			let cZ2World = 0;
-			let fZ1Screen = 0;
-			let cZ1Screen = 0;
-			let fZ2Screen = 0;
-			let cZ2Screen = 0;
+			let mut fWallHeight = 0;
+			let mut cWallHeight = 0;
+			let mut fZ2World = 0;
+			let mut cZ2World = 0;
+			let mut fZ1Screen = 0;
+			let mut cZ1Screen = 0;
+			let mut fZ2Screen = 0;
+			let mut cZ2Screen = 0;
 
 			if !drawingHorizon {
-				hit = hits[j];
+				hit = hits[j as usize];
 				distance = RCL_nonZero(hit.distance);
-				p.hit = hit;
+				p.hit = hit.clone();
 
-				fWallHeight = floorHeightFunction(hit.square.x,hit.square.y);
+				fWallHeight = floorHeightFunction(hit.square.x as i16, hit.square.y as i16);
 				fZ2World = fWallHeight - self._RCL_camera.height;
-				fZ1Screen = self._RCL_middleRow - RCL_perspectiveScale((fZ1World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
-				fZ2Screen = self._RCL_middleRow - RCL_perspectiveScale((fZ2World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
+				fZ1Screen = self._RCL_middleRow as RCL_Unit - RCL_perspectiveScale((fZ1World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
+				fZ2Screen = self._RCL_middleRow as RCL_Unit - RCL_perspectiveScale((fZ2World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
 
-				if let Some(ceilingHeightFunc) = self._RCL_ceilFunction {
-					cWallHeight = ceilingHeightFunc(hit.square.x,hit.square.y);
+				if let Some(chf) = ceilingHeightFunc {
+					cWallHeight = chf(hit.square.x as i16, hit.square.y as i16);
 					cZ2World = cWallHeight - self._RCL_camera.height;
-					cZ1Screen = self._RCL_middleRow - RCL_perspectiveScale((cZ1World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
-					cZ2Screen = self._RCL_middleRow - RCL_perspectiveScale((cZ2World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
+					cZ1Screen = self._RCL_middleRow as RCL_Unit - RCL_perspectiveScale((cZ1World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
+					cZ2Screen = self._RCL_middleRow as RCL_Unit - RCL_perspectiveScale((cZ2World * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE, distance);
 				}
 			} else {
-				fZ1Screen = self._RCL_middleRow;
-				cZ1Screen = self._RCL_middleRow + 1;
-				_RCL_makeInfiniteHit(&p.hit,&mut ray);
+				fZ1Screen =  self._RCL_middleRow      as RCL_Unit;
+				cZ1Screen = (self._RCL_middleRow + 1) as RCL_Unit;
+				p.hit._RCL_makeInfiniteHit(&ray);
 			}
 
-			let limit;
+			let mut limit;
 
 			p.isWall = false;
 			p.isHorizon = drawingHorizon;
@@ -1182,33 +1198,33 @@ impl RCL_Renderer_Global {
 			p.height = fZ1World + self._RCL_camera.height;
 			p.wallHeight = 0;
 
-			if RCL_COMPUTE_FLOOR_DEPTH == 1 {
-				p.depth = (self._RCL_fHorizontalDepthStart - fPosY) * self._RCL_horizontalDepthStep;
+			if RCL_COMPUTE_FLOOR_DEPTH {
+				p.depth = (self._RCL_fHorizontalDepthStart - fPosY) as RCL_Unit * self._RCL_horizontalDepthStep;
 			} else {
 				p.depth = 0;
 			}
 
 			limit = self._RCL_drawHorizontalColumn(general, fPosY,fZ1Screen,cPosY + 1,
-			 CAMERA_RESOLUTION_Y,fZ1World,NonZeroSignum::NEG,RCL_COMPUTE_FLOOR_DEPTH,
+			 CAMERA_RESOLUTION_Y as i16,fZ1World,NonZeroSignum::NEG,RCL_COMPUTE_FLOOR_DEPTH,
 			 // ^ purposfully allow outside screen bounds
 				 RCL_COMPUTE_FLOOR_TEXCOORDS && p.height == RCL_FLOOR_TEXCOORDS_HEIGHT,
-				 1,&ray,&p);
+				 1, &ray, &mut p);
 
 			if fPosY > limit {
 				fPosY = limit;
 			}
 
-			if self._RCL_ceilFunction.is_some() || drawingHorizon {
+			if ceilingHeightFunc.is_some() || drawingHorizon {
 				// draw ceiling until wall
 				p.isFloor = false;
 				p.height = cZ1World + self._RCL_camera.height;
 
-				if RCL_COMPUTE_CEILING_DEPTH == 1 {
-					p.depth = (cPosY - self._RCL_cHorizontalDepthStart) * self._RCL_horizontalDepthStep;
+				if RCL_COMPUTE_CEILING_DEPTH {
+					p.depth = (cPosY - self._RCL_cHorizontalDepthStart) as RCL_Unit * self._RCL_horizontalDepthStep;
 				}
 
 				limit = self._RCL_drawHorizontalColumn(general, cPosY,cZ1Screen,
-					-1,fPosY - 1,cZ1World,NonZeroSignum::POS,RCL_COMPUTE_CEILING_DEPTH,0,1,&ray,&p);
+					-1,fPosY as i16 - 1,cZ1World,NonZeroSignum::POS, RCL_COMPUTE_CEILING_DEPTH, false,1, &ray,&mut p);
 				// ^ purposfully allow outside screen bounds here
 
 				if cPosY < limit {
@@ -1230,18 +1246,18 @@ impl RCL_Renderer_Global {
 					p.isFloor = true;
 
 					limit = Self::_RCL_drawWall(general, fPosY,fZ1Screen,fZ2Screen,cPosY + 1,
-										CAMERA_RESOLUTION_Y,
+										CAMERA_RESOLUTION_Y as i16,
 										// ^ purposfully allow outside screen bounds here
 										if RCL_TEXTURE_VERTICAL_STRETCH == 1 {
 											RCL_UNITS_PER_SQUARE
 										} else {
 											fZ2World - fZ1World
 										}
-										,NonZeroSignum::NEG,&p);
+										,NonZeroSignum::NEG, &mut p);
 
 
-					if fPosY as i16 > limit {
-						fPosY = limit as u16;
+					if fPosY > limit {
+						fPosY = limit;
 					}
 
 					// for the next iteration
@@ -1251,7 +1267,7 @@ impl RCL_Renderer_Global {
 
 				// draw ceiling wall
 
-				if self._RCL_ceilFunction.is_some() && cPosY < _RCL_camResYLimit { // pixels left?
+				if ceilingHeightFunc.is_some() && cPosY < _RCL_camResYLimit as i16 { // pixels left?
 					p.isFloor = false;
 					p.height = cZ1World + self._RCL_camera.height;
 					p.wallHeight = cWallHeight;
@@ -1278,19 +1294,19 @@ impl RCL_Renderer_Global {
 		}
 	}
 
-	fn _RCL_columnFunctionSimple(&mut self, &mut general:RCL_General, hits:&[RCL_HitResult], hitCount:u16, x:u16, ray:RCL_Ray) {
-		let y = 0;
+	fn _RCL_columnFunctionSimple(&mut self, general:&mut RCL_General, hits:&[RCL_HitResult], x:u16, ray:RCL_Ray) {
+		let mut y = 0;
 		let mut wallHeightScreen:RCL_Unit = 0;
-		let mut wallStart:RCL_Unit = self._RCL_middleRow;
+		let mut wallStart:RCL_Unit = self._RCL_middleRow as RCL_Unit;
 		let mut heightOffset:RCL_Unit = 0;
 
 		let mut dist:RCL_Unit = 1;
 
-		let mut p:RCL_PixelInfo;
-		p.position.x = x;
+		let mut p = RCL_PixelInfo::zeroed();
+		p.position.x = x as RCL_Unit;
 		p.wallHeight = RCL_UNITS_PER_SQUARE;
 
-		if hitCount > 0 {
+		if hits.len() > 0 {
 			let mut hit = &hits[0];
 
 			let mut goOn = true;
@@ -1299,7 +1315,7 @@ impl RCL_Renderer_Global {
 				if hit.arrayValue == 0 {
 					// standing inside door square, looking out => move to the next hit
 
-					if hitCount > 1 {
+					if hits.len() > 1 {
 						hit = &hits[1];
 					} else {
 						goOn = false;
@@ -1318,12 +1334,12 @@ impl RCL_Renderer_Global {
 					if unrolled {
 						goOn = false;
 
-						if hitCount > 1 { // should probably always be true (hit on square exit)
+						if hits.len() > 1 { // should probably always be true (hit on square exit)
 							if hit.direction % 2 != hits[1].direction % 2 {
 								// hit on the inner side
 								hit = &hits[1];
 								goOn = true;
-							} else if hitCount > 2 {
+							} else if hits.len() > 2 {
 								// hit on the opposite side
 								hit = &hits[2];
 								goOn = true;
@@ -1348,12 +1364,12 @@ impl RCL_Renderer_Global {
 					0
 				};
 
-				heightOffset = RCL_perspectiveScale(self._RCL_cameraHeightScreen,dist);
+				heightOffset = RCL_perspectiveScale(self._RCL_cameraHeightScreen as RCL_Unit, dist);
 
-				wallStart = self._RCL_middleRow - wallHeightScreen + heightOffset + RCL_normalizedWallHeight;
+				wallStart = self._RCL_middleRow as RCL_Unit - wallHeightScreen + heightOffset + RCL_normalizedWallHeight;
 			}
 		} else {
-			_RCL_makeInfiniteHit(&p.hit, &ray);
+			p.hit._RCL_makeInfiniteHit(&ray);
 		}
 
 		// draw ceiling
@@ -1364,7 +1380,7 @@ impl RCL_Renderer_Global {
 		p.depth = 1;
 		p.height = RCL_UNITS_PER_SQUARE;
 
-		y = self._RCL_drawHorizontalColumn(general, -1,wallStart,-1,self._RCL_middleRow,self._RCL_camera.height,NonZeroSignum::POS, RCL_COMPUTE_CEILING_DEPTH,0,1,&ray,&p);
+		y = self._RCL_drawHorizontalColumn(general, -1,wallStart,-1,self._RCL_middleRow,self._RCL_camera.height,NonZeroSignum::POS, RCL_COMPUTE_CEILING_DEPTH, false, 1, &ray, &mut p);
 
 		// draw wall
 
@@ -1373,38 +1389,38 @@ impl RCL_Renderer_Global {
 		p.depth = dist;
 		p.height = 0;
 
-		if RCL_ROLL_TEXTURE_COORDS == 1 && RCL_COMPUTE_WALL_TEXCOORDS {
+		if RCL_ROLL_TEXTURE_COORDS && RCL_COMPUTE_WALL_TEXCOORDS {
 			p.hit.textureCoord -= p.hit.doorRoll;
 		}
 
 		p.texCoords.x = p.hit.textureCoord;
 		p.texCoords.y = 0;
 
-		let limit = Self::_RCL_drawWall(general, y,wallStart,wallStart + wallHeightScreen - 1, -1,_RCL_camResYLimit,p.hit.arrayValue,NonZeroSignum::POS,&p);
+		let limit = Self::_RCL_drawWall(general, y,wallStart,wallStart + wallHeightScreen - 1, -1,_RCL_camResYLimit as i16,p.hit.arrayValue,NonZeroSignum::POS,&mut p);
 
 		y = y.max(limit); // take max, in case no wall was drawn
-		y = y.max(wallStart);
+		y = (y as i32).max(wallStart) as i16;
 
 		// draw floor
 
 		p.isWall = false;
 
-		if RCL_COMPUTE_FLOOR_DEPTH == 1 {
-			p.depth = (CAMERA_RESOLUTION_Y - y) * self._RCL_horizontalDepthStep + 1;
+		if RCL_COMPUTE_FLOOR_DEPTH {
+			p.depth = (CAMERA_RESOLUTION_Y as RCL_Unit - y as RCL_Unit) * self._RCL_horizontalDepthStep + 1;
 		}
 
-		self._RCL_drawHorizontalColumn(general, y,_RCL_camResYLimit,-1,_RCL_camResYLimit, self._RCL_camera.height,NonZeroSignum::POS,RCL_COMPUTE_FLOOR_DEPTH,RCL_COMPUTE_FLOOR_TEXCOORDS, -1,&ray,&mut p);
+		self._RCL_drawHorizontalColumn(general, y,_RCL_camResYLimit as RCL_Unit,-1,_RCL_camResYLimit as i16, self._RCL_camera.height,NonZeroSignum::POS,RCL_COMPUTE_FLOOR_DEPTH,RCL_COMPUTE_FLOOR_TEXCOORDS, -1,&ray,&mut p);
 	}
 
 	// Precomputes a distance from camera to the floor at each screen row into an array (must be preallocated with sufficient (CAMERA_RESOLUTION_Y) length).
 	#[inline]
-	fn _RCL_precomputeFloorDistances(&self, camera:RCL_Camera, startIndex:u8) -> [RCL_Unit; CAMERA_RESOLUTION_Y as usize] {
+	fn _RCL_precomputeFloorDistances(&self, camera:&RCL_Camera, startIndex:u16) -> [RCL_Unit; CAMERA_RESOLUTION_Y as usize] {
 		let mut floorPixelDistances = [0 as RCL_Unit;CAMERA_RESOLUTION_Y as usize];
 
 		let camHeightScreenSize = (camera.height * CAMERA_RESOLUTION_Y as RCL_Unit) / RCL_UNITS_PER_SQUARE;
 
 		for i in startIndex..CAMERA_RESOLUTION_Y {
-			floorPixelDistances[i] = RCL_perspectiveScaleInverse(camHeightScreenSize, RCL_absVal(i as RCL_Unit - self._RCL_middleRow));
+			floorPixelDistances[i as usize] = RCL_perspectiveScaleInverse(camHeightScreenSize, RCL_absVal(i as RCL_Unit - self._RCL_middleRow as RCL_Unit));
 		}
 
 		return floorPixelDistances;
@@ -1437,40 +1453,38 @@ impl RCL_Renderer_Global {
 		@param pixelFunc callback function to draw a single pixel on screen
 		@param constraints constraints for each cast ray
 	*/
-	pub(crate) fn RCL_renderComplex(&mut self, cam:&RCL_Camera,
-																	ceilingHeightFunc:Option<RCL_ArrayFunction>,
-																	typeFunction:Option<RCL_ArrayFunction>, constraints: RCL_RayConstraints) {
-		self._RCL_ceilFunction = ceilingHeightFunc;
-		self._RCL_camera = cam;
+	pub fn RCL_renderComplex(&mut self, general:&mut RCL_General, cam:RCL_Camera, typeFunction:Option<RCL_ArrayFunction>) {
+		self._RCL_camera = cam.clone();
 
-		self._RCL_middleRow = halfResY + cam.shear;
+		self._RCL_middleRow = halfResY as i16 + cam.shear;
 
-		self._RCL_fHorizontalDepthStart = self._RCL_middleRow + halfResY;
-		self._RCL_cHorizontalDepthStart = self._RCL_middleRow - halfResY;
+		self._RCL_fHorizontalDepthStart = self._RCL_middleRow + halfResY as i16;
+		self._RCL_cHorizontalDepthStart = self._RCL_middleRow - halfResY as i16;
 
 		self._RCL_startFloorHeight =
 			floorHeightFunction(
-				RCL_divRoundDown(cam.position.x,RCL_UNITS_PER_SQUARE),
-				RCL_divRoundDown(cam.position.y,RCL_UNITS_PER_SQUARE)
+				RCL_divRoundDown(cam.position.x,RCL_UNITS_PER_SQUARE) as i16,
+				RCL_divRoundDown(cam.position.y,RCL_UNITS_PER_SQUARE) as i16
 			) - cam.height;
 
-		self._RCL_startCeil_Height = if let Some(ceilingHeightFunc) = ceilingHeightFunc {
-			ceilingHeightFunc(
-				RCL_divRoundDown(cam.position.x,RCL_UNITS_PER_SQUARE),
-				RCL_divRoundDown(cam.position.y,RCL_UNITS_PER_SQUARE)
-				) - cam.height;
+		self._RCL_startCeil_Height =
+			if let Some(chf) = ceilingHeightFunc {
+				chf(
+					RCL_divRoundDown(cam.position.x,RCL_UNITS_PER_SQUARE) as i16,
+					RCL_divRoundDown(cam.position.y,RCL_UNITS_PER_SQUARE) as i16
+				) - cam.height
 			} else {
 				RCL_INFINITY
 			};
 
-		self._RCL_horizontalDepthStep = RCL_HORIZON_DEPTH / CAMERA_RESOLUTION_Y;
+		self._RCL_horizontalDepthStep = RCL_HORIZON_DEPTH / CAMERA_RESOLUTION_Y as RCL_Unit;
 
 		if RCL_COMPUTE_FLOOR_TEXCOORDS {
-			let floorPixelDistances = Self::_RCL_precomputeFloorDistances(cam, 0);
-			self._RCL_floorPixelDistances = floorPixelDistances; // pass to column function
+			let floorPixelDistances = self._RCL_precomputeFloorDistances(&cam, 0);
+			self._RCL_floorPixelDistances = Some(floorPixelDistances); // pass to column function
 		}
 
-		self.RCL_castRaysMultiHit(cam, self._RCL_floorCeilFunction, typeFunction, self._RCL_columnFunctionComplex, constraints);
+		self.RCL_castRaysMultiHit(general, &cam, Self::_RCL_floorCeilFunction, typeFunction, Self::_RCL_columnFunctionComplex);
 	}
 
 
@@ -1500,48 +1514,46 @@ impl RCL_Renderer_Global {
 					 -RCL_UNITS_PER_SQUARE = full roll left), can be zero (no rolling door,
 					 rendering should also be faster as fewer intersections will be tested)
 	*/
-	fn RCL_renderSimple(&mut self, cam:RCL_Camera, typeFunc:RCL_ArrayFunction, mut constraints:RCL_RayConstraints) {
-		self._RCL_camera = cam;
-		self._RCL_middleRow = halfResY;
+	fn RCL_renderSimple(&mut self, general:&mut RCL_General, cam:RCL_Camera, typeFunc:Option<RCL_ArrayFunction>) {
+		self._RCL_camera = cam.clone();
+		self._RCL_middleRow = halfResY as i16;
 
-		self._RCL_cameraHeightScreen =
-			(CAMERA_RESOLUTION_Y * (self._RCL_camera.height - RCL_UNITS_PER_SQUARE)) /
-			RCL_UNITS_PER_SQUARE;
+		self._RCL_cameraHeightScreen = (
+			(CAMERA_RESOLUTION_Y as RCL_Unit * (self._RCL_camera.height - RCL_UNITS_PER_SQUARE))
+			/
+			RCL_UNITS_PER_SQUARE
+		) as i16;
 
-		self._RCL_horizontalDepthStep = RCL_HORIZON_DEPTH / CAMERA_RESOLUTION_Y;
+		self._RCL_horizontalDepthStep = RCL_HORIZON_DEPTH / CAMERA_RESOLUTION_Y as RCL_Unit;
 
-		constraints.maxHits =
-			if self._RCL_rollFunction.isSome() {
+		general.defaultConstraints.maxHits =
+			if self._RCL_rollFunction.is_some() {
 				3 // for correctly rendering rolling doors we'll need 3 hits (NOT 2)
 			} else {
 				1 // no door => 1 hit is enough
 			};
 
 		if RCL_COMPUTE_FLOOR_TEXCOORDS {
-			let floorPixelDistances = self._RCL_precomputeFloorDistances(cam, self._RCL_middleRow);
-			self._RCL_floorPixelDistances = floorPixelDistances; // pass to column function
+			// pass to column function
+			self._RCL_floorPixelDistances = Some(self._RCL_precomputeFloorDistances(&cam, self._RCL_middleRow as u16));
 		}
 
-		self.RCL_castRaysMultiHit(cam,
-			|x,y| -> RCL_Unit {
-				self._floorHeightNotZeroFunction(x,y)
-			}
-		,typeFunc, self._RCL_columnFunctionSimple, constraints);
+		self.RCL_castRaysMultiHit(general, &cam, Self::_floorHeightNotZeroFunction,typeFunc, Self::_RCL_columnFunctionSimple);
 
 		if RCL_COMPUTE_FLOOR_TEXCOORDS {
-			self._RCL_floorPixelDistances = 0;
+			self._RCL_floorPixelDistances = None;
 		}
 	}
 
 	// checks a single square for collision against the camera
 	// #define
-	fn collCheck(&mut self, dirCollides:&mut bool, s1:i16, s2:i16, computeHeight:i8, bottomLimit:i16, topLimit:i16, ceilingHeightFunc:Option<RCL_ArrayFunction>) {
+	fn collCheck(&mut self, dirCollides:&mut bool, s1:i16, s2:i16, computeHeight:bool, bottomLimit:RCL_Unit, topLimit:RCL_Unit) {
 		if computeHeight {
 			let height = floorHeightFunction(s1,s2);
 			if height > bottomLimit {
 				*dirCollides = true;
-			} else if let Some(ceilingHeightFunc) = ceilingHeightFunc {
-				height = ceilingHeightFunc(s1, s2);
+			} else if let Some(chf) = ceilingHeightFunc {
+				let height = chf(s1, s2);
 				if height < topLimit {
 					*dirCollides = true;
 				}
@@ -1557,20 +1569,20 @@ impl RCL_Renderer_Global {
 	fn collCheckOrtho(&mut self,
 		dirCollides:&mut bool, dirSquare:i16, dirSquareNew:i16, dir2Dir:i16, dir2Square:&mut i16, dir2Square2:&mut i16,
 		s1:i16, s2:i16,
-		x:i8,
-		computeHeight:i8, bottomLimit:i16, topLimit:i16, corner:RCL_Vector2D, ceilingHeightFunc:Option<RCL_ArrayFunction>
+		x:bool,
+		computeHeight:bool, bottomLimit:RCL_Unit, topLimit:RCL_Unit, corner_dir2:RCL_Unit
 	) {
 		if dirSquareNew != dirSquare {
-			self.collCheck(dirCollides, s1, s2, computeHeight, bottomLimit, topLimit, ceilingHeightFunc);
+			self.collCheck(dirCollides, s1, s2, computeHeight, bottomLimit, topLimit);
 		}
-		if !dirCollides { // now also check for coll on the neighbouring square
-			*dir2Square2 = RCL_divRoundDown(corner.dir2 - dir2Dir * RCL_CAMERA_COLL_RADIUS * 2,RCL_UNITS_PER_SQUARE);
+		if !*dirCollides { // now also check for coll on the neighbouring square
+			*dir2Square2 = RCL_divRoundDown(corner_dir2 - dir2Dir as RCL_Unit * RCL_CAMERA_COLL_RADIUS * 2,RCL_UNITS_PER_SQUARE) as i16;
 		}
 		if dir2Square2 != dir2Square {
 			if x {
-				self.collCheck(dirCollides, dirSquareNew, *dir2Square2, computeHeight, bottomLimit, topLimit, ceilingHeightFunc);
+				self.collCheck(dirCollides, dirSquareNew, *dir2Square2, computeHeight, bottomLimit, topLimit);
 			} else {
-				self.collCheck(dirCollides, *dir2Square2, dirSquareNew, computeHeight, bottomLimit, topLimit, ceilingHeightFunc);
+				self.collCheck(dirCollides, *dir2Square2, dirSquareNew, computeHeight, bottomLimit, topLimit);
 			}
 		}
 	}
@@ -1596,60 +1608,71 @@ impl RCL_Renderer_Global {
 	pub fn RCL_moveCameraWithCollision(&mut self,
 																 camera:&mut RCL_Camera,
 																 planeOffset:RCL_Vector2D, heightOffset:RCL_Unit,
-																 ceilingHeightFunc:Option<RCL_ArrayFunction>,
 																 computeHeight:bool, force:bool
 	) {
-		let movesInPlane:i8 = planeOffset.x != 0 || planeOffset.y != 0;
+		let movesInPlane = planeOffset.x != 0 || planeOffset.y != 0;
 		let xSquareNew:i16;
 		let ySquareNew:i16;
 
 		if movesInPlane || force {
-			let corner:RCL_Vector2D; // BBox corner in the movement direction
-			let cornerNew:RCL_Vector2D;
-
 			let xDir:i16 = if planeOffset.x > 0 { 1 } else { -1 };
 			let yDir:i16 = if planeOffset.y > 0 { 1 } else { -1 };
 
-			corner.x = camera.position.x + xDir * RCL_CAMERA_COLL_RADIUS;
-			corner.y = camera.position.y + yDir * RCL_CAMERA_COLL_RADIUS;
+			// BBox corner in the movement direction
+			let mut corner:RCL_Vector2D = RCL_Vector2D {
+				x: camera.position.x + xDir as RCL_Unit * RCL_CAMERA_COLL_RADIUS,
+				y: camera.position.y + yDir as RCL_Unit * RCL_CAMERA_COLL_RADIUS,
+			};
 
-			let xSquare:i16 = RCL_divRoundDown(corner.x,RCL_UNITS_PER_SQUARE);
-			let ySquare:i16 = RCL_divRoundDown(corner.y,RCL_UNITS_PER_SQUARE);
+			let mut xSquare:i16 = RCL_divRoundDown(corner.x,RCL_UNITS_PER_SQUARE) as i16;
+			let mut ySquare:i16 = RCL_divRoundDown(corner.y,RCL_UNITS_PER_SQUARE) as i16;
 
-			cornerNew.x = corner.x + planeOffset.x;
-			cornerNew.y = corner.y + planeOffset.y;
+			let mut cornerNew = RCL_Vector2D {
+				x: corner.x + planeOffset.x,
+				y: corner.y + planeOffset.y,
+			};
 
-			xSquareNew = RCL_divRoundDown(cornerNew.x,RCL_UNITS_PER_SQUARE);
-			ySquareNew = RCL_divRoundDown(cornerNew.y,RCL_UNITS_PER_SQUARE);
+			xSquareNew = RCL_divRoundDown(cornerNew.x,RCL_UNITS_PER_SQUARE) as i16;
+			ySquareNew = RCL_divRoundDown(cornerNew.y,RCL_UNITS_PER_SQUARE) as i16;
 
-			let bottomLimit:RCL_Unit = -1 * RCL_INFINITY;
-			let topLimit:RCL_Unit = RCL_INFINITY;
+			let bottomLimit;
+			let topLimit;
 
 			if computeHeight {
 				bottomLimit = camera.height - RCL_CAMERA_COLL_HEIGHT_BELOW + RCL_CAMERA_COLL_STEP_HEIGHT;
 				topLimit = camera.height + RCL_CAMERA_COLL_HEIGHT_ABOVE;
+			} else {
+				// TODO: personal, check linter. will it suggest to replace "-1 *" with "-"?
+				bottomLimit = -1 * RCL_INFINITY;
+				topLimit = RCL_INFINITY;
 			}
 
 			let mut xCollides = false;
 			let mut ySquare2:i16 = 0;
 			// xy
-			self.collCheckOrtho(&mut xCollides,xSquare,xSquareNew, yDir, ySquare, &mut ySquare2,xSquareNew,ySquare,1, computeHeight, bottomLimit, topLimit, corner);
+			let ys = ySquare;
+			self.collCheckOrtho(&mut xCollides,xSquare,xSquareNew, yDir, &mut ySquare, &mut ySquare2,xSquareNew,ys,true, computeHeight, bottomLimit, topLimit, corner.y);
 
 			let mut yCollides = false;
 			let mut xSquare2:i16 = 0;
 			// yx
-			self.collCheckOrtho(&mut yCollides,ySquare, ySquareNew, xDir, xSquare, &mut xSquare2,xSquare,ySquareNew,0, computeHeight, bottomLimit, topLimit, corner);
+			let xs = xSquare;
+			self.collCheckOrtho(&mut yCollides,ySquare, ySquareNew, xDir, &mut xSquare, &mut xSquare2,xs,ySquareNew,false, computeHeight, bottomLimit, topLimit, corner.x);
 
 			// #define
 			fn collHandle(dirCollides:bool, dirSquare:i16, dirDir:i16, cornerNewDir:&mut RCL_Unit) {
 				if dirCollides {
-					*cornerNewDir = dirSquare * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2 + dirDir * (RCL_UNITS_PER_SQUARE / 2) - dirDir;
+					*cornerNewDir =
+						dirSquare as RCL_Unit * RCL_UNITS_PER_SQUARE +
+						RCL_UNITS_PER_SQUARE / 2 +
+						dirDir as RCL_Unit * (RCL_UNITS_PER_SQUARE / 2) -
+						dirDir as RCL_Unit;
 				}
 			}
 
 			if !xCollides && !yCollides { // if non-diagonal collision happend, corner collision can't happen
 				if xSquare != xSquareNew && ySquare != ySquareNew { // corner?
-					let xyCollides = false;
+					let mut xyCollides = false;
 					self.collCheck(&mut xyCollides, xSquareNew, ySquareNew, computeHeight, bottomLimit, topLimit);
 
 					if xyCollides {
@@ -1659,58 +1682,60 @@ impl RCL_Renderer_Global {
 				}
 			}
 
-			collHandle(xCollides, xSquare, xDir, cornerNew.x);
-			collHandle(yCollides, ySquare, yDir, cornerNew.y);
+			collHandle(xCollides, xSquare, xDir, &mut cornerNew.x);
+			collHandle(yCollides, ySquare, yDir, &mut cornerNew.y);
 
 			// #undef collCheck
 			// #undef collHandle
 
-			camera.position.x = cornerNew.x - xDir * RCL_CAMERA_COLL_RADIUS;
-			camera.position.y = cornerNew.y - yDir * RCL_CAMERA_COLL_RADIUS;
+			camera.position.x = cornerNew.x - xDir as RCL_Unit * RCL_CAMERA_COLL_RADIUS;
+			camera.position.y = cornerNew.y - yDir as RCL_Unit * RCL_CAMERA_COLL_RADIUS;
 		}
 
 		if computeHeight && (movesInPlane || heightOffset != 0 || force) {
 			camera.height += heightOffset;
 
-			let xSquare1:i16 = RCL_divRoundDown(camera.position.x - RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE);
-			let xSquare2:i16 = RCL_divRoundDown(camera.position.x + RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE);
-			let ySquare1:i16 = RCL_divRoundDown(camera.position.y - RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE);
-			let ySquare2:i16 = RCL_divRoundDown(camera.position.y + RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE);
+			let xSquare1 = RCL_divRoundDown(camera.position.x - RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE) as i16;
+			let xSquare2 = RCL_divRoundDown(camera.position.x + RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE) as i16;
+			let ySquare1 = RCL_divRoundDown(camera.position.y - RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE) as i16;
+			let ySquare2 = RCL_divRoundDown(camera.position.y + RCL_CAMERA_COLL_RADIUS, RCL_UNITS_PER_SQUARE) as i16;
 
-			let bottomLimit = floorHeightFunction(xSquare1, ySquare1);
-			let topLimit =
-				if let Some(ceilingHeightFunc) = ceilingHeightFunc {
-					ceilingHeightFunc(xSquare1, ySquare1)
+			let mut bottomLimit = floorHeightFunction(xSquare1, ySquare1);
+			let mut topLimit =
+				if let Some(chf) = ceilingHeightFunc {
+					chf(xSquare1, ySquare1)
 				} else {
 					RCL_INFINITY
-				};
+				}
+			;
 
-			let height;
+			let mut height:RCL_Unit = 0;
 
 			// #define
 			#[inline]
-			fn checkSquares(xSquare:i16, ySquare:i16, height:&mut i16, bottomLimit:&mut i16, topLimit:&mut i16, ceilingHeightFunc:Option<RCL_ArrayFunction>) {
+			fn checkSquares(xSquare:i16, ySquare:i16, height:&mut RCL_Unit, bottomLimit:&mut RCL_Unit, topLimit:&mut RCL_Unit) {
 				*height = floorHeightFunction(xSquare, ySquare);
 				*bottomLimit = *bottomLimit.max(height);
 				*height =
-					if let Some(ceilingHeightFunc) = ceilingHeightFunc {
-						ceilingHeightFunc(xSquare, ySquare)
+					if let Some(chf) = ceilingHeightFunc {
+						chf(xSquare, ySquare)
 					} else {
 						RCL_INFINITY
-					};
+					}
+				;
 				*topLimit = *topLimit.min(height);
 			}
 
 			if xSquare2 != xSquare1 {
-				checkSquares(xSquare2, ySquare1, height, bottomLimit, topLimit);
+				checkSquares(xSquare2, ySquare1, &mut height, &mut bottomLimit, &mut topLimit);
 			}
 
 			if ySquare2 != ySquare1 {
-				checkSquares(xSquare1, ySquare2, height, bottomLimit, topLimit);
+				checkSquares(xSquare1, ySquare2, &mut height, &mut bottomLimit, &mut topLimit);
 			}
 
 			if xSquare2 != xSquare1 && ySquare2 != ySquare1 {
-				checkSquares(xSquare2, ySquare2, height, bottomLimit, topLimit);
+				checkSquares(xSquare2, ySquare2, &mut height, &mut bottomLimit, &mut topLimit);
 			}
 
 			camera.height = RCL_clamp(camera.height, bottomLimit + RCL_CAMERA_COLL_HEIGHT_BELOW, topLimit - RCL_CAMERA_COLL_HEIGHT_ABOVE);

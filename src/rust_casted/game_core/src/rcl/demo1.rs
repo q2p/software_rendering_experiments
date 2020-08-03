@@ -3,6 +3,7 @@ use crate::rcl_my_settings::*;
 use crate::rcl_general::*;
 use crate::timing::Time;
 use crate::controls::Controls;
+use crate::RGBA;
 
 /**
   Raycasting demo 1 for Pokitto.
@@ -44,7 +45,7 @@ pub(crate) struct Demo1 {
 }
 
 impl Demo1 {
-  pub fn new() -> Demo1 {
+  pub const fn new() -> Demo1 {
     Demo1 {
       player: Player::new(),
       runReleased: false,
@@ -55,42 +56,42 @@ impl Demo1 {
   }
 
   fn draw(&mut self, time:&Time) {
-    self.renderer.RCL_renderComplex(&mut self.player.mCamera,ceilingHeightAt,textureAt,self.general.defaultConstraints);
+    self.renderer.RCL_renderComplex(&mut self.general, self.player.mCamera.clone(),Some(textureAt));
 
-    let previousDepth:RCL_Unit;
+    let mut previousDepth:RCL_Unit = 0;
 
     // draw sprites
 
     for i in 0..SPRITES {
       // use Chebyshew distance instead Euclidean, it's faster
       if
-        RCL_absVal(sprites[i].mPosition.x - self.player.mCamera.position.x) > SPRITE_MAX_DISTANCE ||
-        RCL_absVal(sprites[i].mPosition.y - self.player.mCamera.position.y) > SPRITE_MAX_DISTANCE
+        RCL_absVal(sprites[i as usize].mPosition.x - self.player.mCamera.position.x) > SPRITE_MAX_DISTANCE ||
+        RCL_absVal(sprites[i as usize].mPosition.y - self.player.mCamera.position.y) > SPRITE_MAX_DISTANCE
       {
         continue;
       }
 
-      let pos = RCL_mapToScreen(sprites[i].mPosition, sprites[i].mHeight, &self.player.mCamera);
+      let pos = RCL_mapToScreen(sprites[i as usize].mPosition, sprites[i as usize].mHeight, &self.player.mCamera);
 
       if pos.depth > 0 { // is in front of camera?{
-        let mut image = sprites[i].mImage;
+        let mut image = sprites[i as usize].mImage;
 
         // animate torch
-        if image == spriteTorch1 && (time.tick_number() >> 2) % 2 == 0 {
-          image = spriteTorch2;
+        if core::ptr::eq(image, &spriteTorch1) && (time.tick_number() >> 2) % 2 == 0 {
+          image = &spriteTorch2;
         }
 
         self.general.drawSpriteSquare(&mut self.screen,
-          image,pos.position.x * SUBSAMPLE,
-          pos.position.y,
+          image,pos.position.x as i16 * SUBSAMPLE as i16,
+          pos.position.y as i16,
           pos.depth,
-          self.renderer.RCL_perspectiveScale(sprites[i].mPixelSize,pos.depth),distanceToIntensity(pos.depth)
+          RCL_perspectiveScale(sprites[i as usize].mPixelSize,pos.depth) as u16,distanceToIntensity(pos.depth)
         );
       }
 
       // trick: sort the sprites by distance with bubble sort as we draw - the order will be correct in a few frames
       if i != 0 && pos.depth > previousDepth {
-        core::mem::swap(sprites[i], sprites[i-1]);
+        core::mem::swap(&mut sprites[i as usize], &mut sprites[(i-1) as usize]);
       }
 
       previousDepth = pos.depth;
@@ -111,7 +112,7 @@ impl Demo1 {
 		*/
   }
 
-  pub(crate) fn main(&mut self) {
+  pub fn main(&mut self) {
     self.general.initGeneral();
     self.general.defaultConstraints.maxHits = 8;
     self.general.defaultConstraints.maxSteps = 15;
@@ -120,8 +121,8 @@ impl Demo1 {
     self.player.mCamera.direction = -1 * RCL_UNITS_PER_SQUARE / 4;
   }
 
-  pub fn update(&mut self, image:&mut [u8], time:&Time, controls:&Controls) {
-    unsafe { FC = time.tick_number() };
+  pub fn update(&mut self, image:&mut [RGBA], time:&Time, controls:&Controls) {
+    unsafe { FC = time.tick_number() as u8 };
 
     self.draw(time);
 
@@ -180,8 +181,8 @@ const SPRITE_MAX_DISTANCE:RCL_Unit = 5 * RCL_UNITS_PER_SQUARE;
 
 const sprites:[Sprite; SPRITES as usize] = placeSprites();
 
-fn addSpriteHeightFract(i:usize, f:RCL_Unit) {
-  sprites[i].mHeight += RCL_UNITS_PER_SQUARE / f;
+const fn addSpriteHeightFract(sprite:&mut Sprite, f:RCL_Unit) {
+  sprite.mHeight += RCL_UNITS_PER_SQUARE / f;
 }
 const fn placeSprites() -> [Sprite; SPRITES as usize] {
   let mut ret = [
@@ -203,19 +204,19 @@ const fn placeSprites() -> [Sprite; SPRITES as usize] {
     Sprite::new(&spriteTorch1,14,19,2,120),
     Sprite::new(&spriteTorch1,1 ,19,3,120),
   ];
-  addSpriteHeightFract(0,8);
-  addSpriteHeightFract(1,8);
-  addSpriteHeightFract(3,4);
+  addSpriteHeightFract(&mut ret[0],8);
+  addSpriteHeightFract(&mut ret[1],8);
+  addSpriteHeightFract(&mut ret[3],4);
   ret[3].mPosition.y -= RCL_UNITS_PER_SQUARE / 2;
-  addSpriteHeightFract(4,4);
-  addSpriteHeightFract(5,2);
-  addSpriteHeightFract(6,4);
-  addSpriteHeightFract(7,8);
-  addSpriteHeightFract(8,8);
-  addSpriteHeightFract(9,8);
-  addSpriteHeightFract(10,8);
-  addSpriteHeightFract(11,4);
-  addSpriteHeightFract(12,4);
+  addSpriteHeightFract(&mut ret[4],4);
+  addSpriteHeightFract(&mut ret[5],2);
+  addSpriteHeightFract(&mut ret[6],4);
+  addSpriteHeightFract(&mut ret[7],8);
+  addSpriteHeightFract(&mut ret[8],8);
+  addSpriteHeightFract(&mut ret[9],8);
+  addSpriteHeightFract(&mut ret[10],8);
+  addSpriteHeightFract(&mut ret[11],4);
+  addSpriteHeightFract(&mut ret[12],4);
   ret[13].mPosition.y += RCL_UNITS_PER_SQUARE / 3;
   ret[14].mPosition.y += RCL_UNITS_PER_SQUARE / 3;
   ret[15].mPosition.y += RCL_UNITS_PER_SQUARE / 3;
@@ -1216,7 +1217,7 @@ fn isWithinMap(x:i16, y:i16) -> Option<u16> {
     x >= 0 && x < LEVEL_X_RES as i16 &&
     y >= 0 && y < LEVEL_Y_RES as i16
   {
-    Some((LEVEL_Y_RES - y as u16 - 1) * LEVEL_X_RES + x as u16)
+    Some((LEVEL_Y_RES - y as u8 - 1) as u16 * LEVEL_X_RES as u16 + x as u16)
   } else {
     None
   }
@@ -1224,28 +1225,28 @@ fn isWithinMap(x:i16, y:i16) -> Option<u16> {
 
 fn textureAt(x:i16, y:i16) -> RCL_Unit {
   match isWithinMap(x, y) {
-    Some(index) => levelTexture[index],
+    Some(index) => levelTexture[index as usize] as RCL_Unit,
     None => 0,
   }
 }
 
-static mut FC:u32 = 0;
+static mut FC:u8 = 0;
 
 pub fn floorHeightAt(x:i16, y:i16) -> RCL_Unit {
   if x == 6 && (y == 13 || y == 14) { // moving lift
-    RCL_absVal(-(((unsafe { FC } % 64) + 32) * (RCL_UNITS_PER_SQUARE / 8)) as RCL_Unit)
+    RCL_absVal(-(((unsafe { FC } % 64) + 32) as RCL_Unit * (RCL_UNITS_PER_SQUARE / 8)) as RCL_Unit)
   } else {
     match isWithinMap(x, y) {
-      Some(index) => levelFloor[index] * (RCL_UNITS_PER_SQUARE / 8),
+      Some(index) => levelFloor[index as usize] as RCL_Unit * (RCL_UNITS_PER_SQUARE / 8),
       None => 0,
     }
   }
 }
 
-fn ceilingHeightAt(x:i16, y:i16) -> RCL_Unit {
+pub fn ceilingHeightAt(x:i16, y:i16) -> RCL_Unit {
   match isWithinMap(x, y) {
-    Some(index) => levelCeiling[index] * RCL_UNITS_PER_SQUARE / 8,
-    None => 127 * RCL_UNITS_PER_SQUARE / 8,
+    Some(index) => levelCeiling[index as usize] as RCL_Unit * (RCL_UNITS_PER_SQUARE / 8),
+    None => 127 * (RCL_UNITS_PER_SQUARE / 8),
   }
 }
 
@@ -1257,15 +1258,15 @@ fn distanceToIntensity(distance:RCL_Unit) -> i8 {
 // Function for drawing a single pixel (like a fragment shader in OpenGL). Bottleneck => should be as fast as possible.
 #[inline]
 pub fn pixelFunc(general:&mut RCL_General, pixel:&RCL_PixelInfo) {
-  let intensity:i16;
-
   if pixel.position.y == MIDDLE_ROW as RCL_Unit {
-    general.zBuffer[pixel.position.x] = pixel.depth;
+    if let Some(p) = general.zBuffer.get_mut(pixel.position.x as usize){
+      *p = pixel.depth;
+    }
   }
 
-  let color:u8;
+  let mut color:u8;
 
-  intensity = distanceToIntensity(pixel.depth);
+  let mut intensity = distanceToIntensity(pixel.depth);
 
   if pixel.isWall {
     if pixel.hit.direction == 0 || pixel.hit.direction == 2 {
@@ -1273,9 +1274,9 @@ pub fn pixelFunc(general:&mut RCL_General, pixel:&RCL_PixelInfo) {
     }
 
     color = if RCL_COMPUTE_WALL_TEXCOORDS {
-      sampleImage(textures[pixel.hit.type_], pixel.texCoords.x, pixel.texCoords.y)
+      sampleImage(&textures[pixel.hit.type_ as usize], pixel.texCoords.x, pixel.texCoords.y)
     } else {
-      textures[pixel.hit.type_][2]
+      textures[pixel.hit.type_ as usize][2]
     };
   } else {
     color =
@@ -1284,16 +1285,16 @@ pub fn pixelFunc(general:&mut RCL_General, pixel:&RCL_PixelInfo) {
       } else {
         if RCL_COMPUTE_FLOOR_TEXCOORDS == 1 {
           if pixel.height == RCL_FLOOR_TEXCOORDS_HEIGHT {
-            sampleImage(texture5, pixel.texCoords.x / 2, pixel.texCoords.y / 2)
+            sampleImage(&texture5, pixel.texCoords.x / 2, pixel.texCoords.y / 2)
           } else {
             HUE(1)
           }
         } else {
-          HUE(10);
+          HUE(10)
         }
       };
   }
   color = addIntensity(color,intensity);
 
-  putSubsampledPixel(pixel.position.x,pixel.position.y,color);
+  putSubsampledPixel(&mut general.screenBuffer, pixel.position.x as u8, pixel.position.y as u8,color);
 }

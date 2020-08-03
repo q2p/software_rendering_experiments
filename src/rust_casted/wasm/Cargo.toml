@@ -1,0 +1,30 @@
+[package]
+name = "wasm"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[lib]
+name = "wasm"
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3
+# opt-level = 'z'
+debug = false
+# debug = true
+rpath = false
+debug-assertions = false
+# opt-level = 0
+# debug = true
+# rpath = true
+# debug-assertions = true
+lto = true
+codegen-units = 1
+panic = 'abort'
+incremental = false
+overflow-checks = false
+
+
+[dependencies]
+game_core = { path = "../game_core" }

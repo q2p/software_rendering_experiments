@@ -1,5 +1,5 @@
-use crate::{ SCREEN_WIDTH, SCREEN_HEIGHT };
-use crate::vector::{Vec3d, VecUVW, Vector };
+use crate::{SCREEN_WIDTH, SCREEN_HEIGHT, RGBA, SCREEN_SPACE};
+use tiny_lib::{matrices::*, vector::*, util::*};
 use crate::controls::*;
 use core::f32::consts::PI;
 
@@ -7,7 +7,7 @@ pub struct SoftwareRenderer {
 	s_mesh:MeshBasic,
 	s_texture:Texture,
 	s_made_with:Texture,
-	image_depth:[f32; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize],
+	image_depth:[f32; SCREEN_SPACE as usize],
 }
 
 impl SoftwareRenderer {
@@ -17,7 +17,7 @@ impl SoftwareRenderer {
 			s_mesh: MeshBasic::new(),
 			s_texture: Texture::zero_resolution_texture(),
 			s_made_with: Texture::zero_resolution_texture(),
-			image_depth: [0f32; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize]
+			image_depth: [0f32; SCREEN_SPACE as usize]
 		}
 	}
 	#[inline(always)]
@@ -27,51 +27,9 @@ impl SoftwareRenderer {
 		load_texture(&mut self.s_made_with, MADE_WITH_BIN);
 	}
 	#[inline(always)]
-
-	fn rotation_matrix_z(a:f32) -> Matrix4x4 {
-		let a_cos = a.cos();
-		let a_sin = a.sin();
-
-		Matrix4x4 {
-			matrix: [
-				[  a_cos,  a_sin,   0f32,   0f32 ],
-				[ -a_sin,  a_cos,   0f32,   0f32 ],
-				[   0f32,   0f32,   1f32,   0f32 ],
-				[   0f32,   0f32,   0f32,   1f32 ],
-			]
-		}
-	}
-	fn rotation_matrix_x(a:f32) -> Matrix4x4 {
-		let a_cos = a.cos();
-		let a_sin = a.sin();
-
-		Matrix4x4 {
-			matrix: [
-				[   1f32,   0f32,   0f32,   0f32 ],
-				[   0f32,  a_cos,  a_sin,   0f32 ],
-				[   0f32, -a_sin,  a_cos,   0f32 ],
-				[   0f32,   0f32,   0f32,   1f32 ],
-			]
-		}
-	}
-	fn rotation_matrix_y(a:f32) -> Matrix4x4 {
-		let a_cos = a.cos();
-		let a_sin = a.sin();
-
-		Matrix4x4 {
-			matrix: [
-				[  a_cos,   0f32, -a_sin,   0f32 ],
-				[   0f32,   1f32,   0f32,   0f32 ],
-				[  a_sin,   0f32,  a_cos,   0f32 ],
-				[   0f32,   0f32,   0f32,   1f32 ],
-			]
-		}
-	}
-	pub fn render(&mut self, image:&mut [u8], tick_number:u32, controls:&Controls) {
-		for i in 0..(SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize * 4) {
-			image[i] = 0;
-		}
-		for i in 0..(SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) {
+	pub fn render(&mut self, image:&mut [RGBA], tick_number:u32, controls:&Controls) {
+		for i in 0..(SCREEN_SPACE as usize) {
+			image[i] = RGBA::zeroed();
 			self.image_depth[i] = 0f32;
 		}
 
@@ -102,11 +60,11 @@ impl SoftwareRenderer {
 		// let light_dir = normalize(&Vec3d::xyz1(1f32, 0.5f32, 0.25f32));
 
 		// Create "Point At" Matrix for camera
-		let camera = Vec3d::xyz1(0f32, 0f32, 0f32);
+		let camera = Vec4::xyz1(0f32, 0f32, 0f32);
 		// unsafe { (m_prec_x - (SCREEN_WIDTH/2) as f32) / 256f32 },
 		// unsafe { (m_prec_y - (SCREEN_WIDTH/2) as f32) / 256f32 },
-		let look_dir = Vec3d::xyz1(0f32 /* (theta*2f32).sin(), */, 0f32, 1f32);
-		let up = Vec3d::xyz1(0f32, 1f32, 0f32);
+		let look_dir = Vec4::xyz1(0f32 /* (theta*2f32).sin(), */, 0f32, 1f32);
+		let up = Vec4::xyz1(0f32, 1f32, 0f32);
 		let target = camera + look_dir;
 		let camera_matrix = point_at_matrix(&camera, &target, &up);
 
@@ -116,17 +74,17 @@ impl SoftwareRenderer {
 			let rotx =  tick_number as f32 * 0.006f32;
 			let roty = (tick_number as f32 * 0.013f32).cos() * PI * 0.1f32 - PI * 0.2f32;
 
-			let mut rot_x_m = Self::rotation_matrix_x(roty);
-			let mut rot_y_m = Self::rotation_matrix_y(rotx);
+			let mut rot_x_m = rotation_matrix_x(roty);
+			let mut rot_y_m = rotation_matrix_y(rotx);
 
-			let mat_rot = mul_matrix(&rot_y_m, &rot_x_m);
+			let mat_rot = &rot_y_m * &rot_x_m;
 
 			// TODO: заменить все повороты, развороты на единую world matrix
 			let mut mat_world = Matrix4x4::ones_cascade(); // Form World Matrix
-			mat_world = mul_matrix(&mat_world, &transition_matrix(0f32, -1.25f32, 0f32));
-			mat_world = mul_matrix(&mat_world, &mat_rot);
+			mat_world = &mat_world * &transition_matrix(&Vec3::new(0f32, -1.25f32, 0f32));
+			mat_world = &mat_world * &mat_rot;
 			// TODO: без трансформации моделька рендерится на 7 юнитов ниже чем нужно
-			mat_world = mul_matrix(&mat_world, &transition_matrix(0f32, 7.3f32, 10f32));
+			mat_world = &mat_world * &transition_matrix(&Vec3::new(0f32, 7.3f32, 10f32));
 
 			// Make view matrix from camera
 			let view_matrix = inverse_transformation_matrix(&camera_matrix);
@@ -175,8 +133,8 @@ impl SoftwareRenderer {
 
 					// Clip Viewed Triangle against near plane, this could form two additional additional triangles.
 					let (clipped_n, clipped_array) = triangle_clip_against_plane(
-						&Vec3d::xyz1(0f32,0f32,clip_plane_near), // Clip Position w = 0 or 1?
-						&Vec3d::xyz1(0f32,0f32,1.0f32), // Clip Normal w = 0 or 1?
+						&Vec4::xyz1(0f32,0f32,clip_plane_near), // Clip Position w = 0 or 1?
+						&Vec4::xyz1(0f32,0f32,1.0f32), // Clip Normal w = 0 or 1?
 						&viewed_triangle
 					);
 
@@ -192,17 +150,17 @@ impl SoftwareRenderer {
 							uvs: clipped_triangle.uvs.clone(),
 						};
 
-						projected_triangle.uvs[0].u /= projected_triangle.vertices[0].w;
-						projected_triangle.uvs[1].u /= projected_triangle.vertices[1].w;
-						projected_triangle.uvs[2].u /= projected_triangle.vertices[2].w;
+						*projected_triangle.uvs[0].u() /= projected_triangle.vertices[0].w;
+						*projected_triangle.uvs[1].u() /= projected_triangle.vertices[1].w;
+						*projected_triangle.uvs[2].u() /= projected_triangle.vertices[2].w;
 
-						projected_triangle.uvs[0].v /= projected_triangle.vertices[0].w;
-						projected_triangle.uvs[1].v /= projected_triangle.vertices[1].w;
-						projected_triangle.uvs[2].v /= projected_triangle.vertices[2].w;
+						*projected_triangle.uvs[0].v() /= projected_triangle.vertices[0].w;
+						*projected_triangle.uvs[1].v() /= projected_triangle.vertices[1].w;
+						*projected_triangle.uvs[2].v() /= projected_triangle.vertices[2].w;
 
-						projected_triangle.uvs[0].w = 1f32 / projected_triangle.vertices[0].w;
-						projected_triangle.uvs[1].w = 1f32 / projected_triangle.vertices[1].w;
-						projected_triangle.uvs[2].w = 1f32 / projected_triangle.vertices[2].w;
+						*projected_triangle.uvs[0].w() = 1f32 / projected_triangle.vertices[0].w;
+						*projected_triangle.uvs[1].w() = 1f32 / projected_triangle.vertices[1].w;
+						*projected_triangle.uvs[2].w() = 1f32 / projected_triangle.vertices[2].w;
 
 						// Scale into view, we moved the normalising into cartesian space out of the matrix.vector function from the previous videos, so do this manually
 						projected_triangle.vertices[0] = div_vec3d(&projected_triangle.vertices[0], projected_triangle.vertices[0].w);
@@ -237,26 +195,26 @@ impl SoftwareRenderer {
 						// a bunch of triangles, so create a queue that we traverse to
 						//  ensure we only test new triangles generated against planes
 						let (clipped_t, clipped_t_array) = triangle_clip_against_plane(
-							&Vec3d::xyz1(0f32, 0f32, 0f32), // Clip Position
-							&Vec3d::xyz1(0f32, 1f32, 0f32), // Clip Normal
+							&Vec4::xyz1(0f32, 0f32, 0f32), // Clip Position
+							&Vec4::xyz1(0f32, 1f32, 0f32), // Clip Normal
 							&projected_triangle
 						);
 						for t in &clipped_t_array[0..clipped_t] {
 							let (clipped_t, clipped_t_array) = triangle_clip_against_plane(
-								&Vec3d::xyz1(0f32, (SCREEN_HEIGHT - 1) as f32, 0f32), // Clip Position
-								&Vec3d::xyz1(0f32, -1f32, 0f32), // Clip Normal
+								&Vec4::xyz1(0f32, (SCREEN_HEIGHT - 1) as f32, 0f32), // Clip Position
+								&Vec4::xyz1(0f32, -1f32, 0f32), // Clip Normal
 								&t
 							);
 							for t in &clipped_t_array[0..clipped_t] {
 								let (clipped_t, clipped_t_array) = triangle_clip_against_plane(
-									&Vec3d::xyz1(0f32, 0f32, 0f32), // Clip Position
-									&Vec3d::xyz1(1f32, 0f32, 0f32), // Clip Normal
+									&Vec4::xyz1(0f32, 0f32, 0f32), // Clip Position
+									&Vec4::xyz1(1f32, 0f32, 0f32), // Clip Normal
 									&t
 								);
 								for t in &clipped_t_array[0..clipped_t] {
 									let (clipped_t, clipped_t_array) = triangle_clip_against_plane(
-										&Vec3d::xyz1(SCREEN_WIDTH as f32, 0f32, 0f32), // Clip Position
-										&Vec3d::xyz1(-1f32, 0f32, 0f32), // Clip Normal
+										&Vec4::xyz1(SCREEN_WIDTH as f32, 0f32, 0f32), // Clip Position
+										&Vec4::xyz1(-1f32, 0f32, 0f32), // Clip Normal
 										&t
 									);
 									for t in &clipped_t_array[0..clipped_t] {
@@ -288,14 +246,14 @@ impl SoftwareRenderer {
 		// Loop through all transformed, viewed, projected, and sorted triangles
 	}
 
-	fn render_outline(image: &mut [u8]) {
-		let w = SCREEN_WIDTH as usize;
-		let h = SCREEN_HEIGHT as usize;
-		for y in 1..h - 1 {
-			let yt = w * (y - 1);
-			let yc = w * (y);
-			let yb = w * (y + 1);
-			for x in 1..w - 1 {
+	fn render_outline(image: &mut [RGBA]) {
+		const W:usize = SCREEN_WIDTH as usize;
+		const H:usize = SCREEN_HEIGHT as usize;
+		for y in 1..H - 1 {
+			let yt = W * (y - 1);
+			let yc = W * (y);
+			let yb = W * (y + 1);
+			for x in 1..W - 1 {
 				let xt = yt + x;
 				let xx = yc + x;
 				let xb = yb + x;
@@ -303,48 +261,45 @@ impl SoftwareRenderer {
 				let xr = xx + 1;
 				unsafe {
 					if
-						*image.get_unchecked(xx * 4 + 3) == 0 && (
-						*image.get_unchecked(xt * 4 + 3) == 0xFF ||
-						*image.get_unchecked(xl * 4 + 3) == 0xFF ||
-						*image.get_unchecked(xr * 4 + 3) == 0xFF ||
-						*image.get_unchecked(xb * 4 + 3) == 0xFF)
+						image.get_unchecked(xx).a == 0 && (
+						image.get_unchecked(xt).a == 0xFF ||
+						image.get_unchecked(xl).a == 0xFF ||
+						image.get_unchecked(xr).a == 0xFF ||
+						image.get_unchecked(xb).a == 0xFF)
 					{
-						*image.get_unchecked_mut(xx * 4 + 0) = 0xFE;
-						*image.get_unchecked_mut(xx * 4 + 1) = 0xFE;
-						*image.get_unchecked_mut(xx * 4 + 2) = 0xFE;
-						*image.get_unchecked_mut(xx * 4 + 3) = 0xFE;
+						image.get_unchecked_mut(xx).r = 0xFE;
+						image.get_unchecked_mut(xx).g = 0xFE;
+						image.get_unchecked_mut(xx).b = 0xFE;
+						image.get_unchecked_mut(xx).a = 0xFE;
 					}
 				}
 			}
 		}
 	}
 
-	fn render_overlay(&mut self, image: &mut [u8]) -> () {
-		for i in 0..(SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) {
-			let off = i * 4;
+	fn render_overlay(&mut self, image: &mut [RGBA]) -> () {
+		for i in 0..SCREEN_SPACE {
 			unsafe {
-				let a = *self.s_made_with.pixels.get_unchecked(off + 3);
-				if a != 0 {
-					*image.get_unchecked_mut(off + 0) = *self.s_made_with.pixels.get_unchecked(off + 0);
-					*image.get_unchecked_mut(off + 1) = *self.s_made_with.pixels.get_unchecked(off + 1);
-					*image.get_unchecked_mut(off + 2) = *self.s_made_with.pixels.get_unchecked(off + 2);
-					*image.get_unchecked_mut(off + 3) = 0xFF;
+				let texture_pixel = self.s_made_with.pixels.get_unchecked(i as usize);
+
+				if texture_pixel.a != 0 {
+					*image.get_unchecked_mut(i as usize) = *texture_pixel;
 				}
 			}
 		}
 	}
 }
 
-fn mul_vec3d(vec:&Vec3d, multiplier:f32) -> Vec3d {
-	return Vec3d::xyz1(vec.x * multiplier, vec.y * multiplier, vec.z * multiplier);
+fn mul_vec3d(vec:&Vec4, multiplier:f32) -> Vec4 {
+	return Vec4::xyz1(vec.x * multiplier, vec.y * multiplier, vec.z * multiplier);
 }
 
-fn div_vec3d(vec:&Vec3d, divider:f32) -> Vec3d {
-	return Vec3d::xyz1(vec.x / divider, vec.y / divider, vec.z / divider);
+fn div_vec3d(vec:&Vec4, divider:f32) -> Vec4 {
+	return Vec4::xyz1(vec.x / divider, vec.y / divider, vec.z / divider);
 }
 
-fn cross_product(vec1:&Vec3d, vec2:&Vec3d) -> Vec3d {
-	return Vec3d {
+fn cross_product(vec1:&Vec4, vec2:&Vec4) -> Vec4 {
+	return Vec4 {
 		x: vec1.y * vec2.z - vec1.z * vec2.y,
 		y: vec1.z * vec2.x - vec1.x * vec2.z,
 		z: vec1.x * vec2.y - vec1.y * vec2.x,
@@ -352,9 +307,9 @@ fn cross_product(vec1:&Vec3d, vec2:&Vec3d) -> Vec3d {
 	};
 }
 
-fn normalize2(vec:&Vec3d) -> Vec3d {
+fn normalize2(vec:&Vec4) -> Vec4 {
 	let len = vec.len();
-	return Vec3d {
+	return Vec4 {
 		x: vec.x / len,
 		y: vec.y / len,
 		z: vec.z / len,
@@ -362,9 +317,9 @@ fn normalize2(vec:&Vec3d) -> Vec3d {
 	};
 }
 
-fn normalize(vec:&Vec3d) -> Vec3d {
+fn normalize(vec:&Vec4) -> Vec4 {
 	let rlen = vec.inv_len();
-	return Vec3d {
+	return Vec4 {
 		x: vec.x * rlen,
 		y: vec.y * rlen,
 		z: vec.z * rlen,
@@ -374,21 +329,21 @@ fn normalize(vec:&Vec3d) -> Vec3d {
 
 #[derive(Copy, Clone)]
 struct Triangle {
-	vertices:[Vec3d; 3],
-	uvs:[VecUVW; 3],
+	vertices:[Vec4; 3],
+	uvs:[Vec3; 3],
 }
 impl Triangle {
 	const fn zero_spaced_verticies() -> Triangle {
 		return Triangle {
 			vertices: [
-				Vec3d::ZERO,
-				Vec3d::ZERO,
-				Vec3d::ZERO,
+				Vec4::ZERO,
+				Vec4::ZERO,
+				Vec4::ZERO,
 			],
 			uvs: [
-				VecUVW::ZERO,
-				VecUVW::ZERO,
-				VecUVW::ZERO,
+				Vec3::ZERO,
+				Vec3::ZERO,
+				Vec3::ZERO,
 			]
 		};
 	}
@@ -396,58 +351,32 @@ impl Triangle {
 
 const MAX_TEXTURE_SIZE:usize = 1024;
 struct Texture {
-	pixels:[u8; MAX_TEXTURE_SIZE*MAX_TEXTURE_SIZE*4],
+	pixels:[RGBA; MAX_TEXTURE_SIZE*MAX_TEXTURE_SIZE],
 	resolution_u:u16,
 	resolution_v:u16,
 }
 impl Texture {
 	const fn zero_resolution_texture() -> Texture {
-		return Texture {
-			pixels: [0; MAX_TEXTURE_SIZE*MAX_TEXTURE_SIZE*4],
+		Texture {
+			pixels: [RGBA::zeroed(); MAX_TEXTURE_SIZE*MAX_TEXTURE_SIZE],
 			resolution_u: 0,
 			resolution_v: 0,
-		};
+		}
 	}
 }
 
-struct Matrix4x4 {
-	matrix:[[f32;4];4],
-}
-impl Matrix4x4 {
-	fn zeros() -> Matrix4x4 {
-		return Matrix4x4 {
-			matrix: [
-				[0f32, 0f32, 0f32, 0f32],
-				[0f32, 0f32, 0f32, 0f32],
-				[0f32, 0f32, 0f32, 0f32],
-				[0f32, 0f32, 0f32, 0f32]
-			]
-		};
-	}
-	fn ones_cascade() -> Matrix4x4 {
-		return Matrix4x4 {
-			matrix: [
-				[1f32, 0f32, 0f32, 0f32],
-				[0f32, 1f32, 0f32, 0f32],
-				[0f32, 0f32, 1f32, 0f32],
-				[0f32, 0f32, 0f32, 1f32]
-			]
-		};
-	}
-}
-
-fn point_at_matrix(pos:&Vec3d, target:&Vec3d, up:&Vec3d) -> Matrix4x4 {
+fn point_at_matrix(pos:&Vec4, target:&Vec4, up:&Vec4) -> Matrix4x4 {
 	// TODO: нужны ли все эти new_up, new_right, или их можно просчитать заранее?
 	// TODO: need normalization?
 	let new_forward = normalize(&(*target - *pos));
 
-	let a = mul_vec3d(&new_forward, Vec3d::dot_product(up, &new_forward));
+	let a = mul_vec3d(&new_forward, Vec4::dot(up, &new_forward));
 	let new_up = normalize(&(*up - a));
 
 	let new_right = cross_product(&new_up, &new_forward);
 
 	return Matrix4x4 {
-		matrix: [
+		m: [
 			[  new_right.x,   new_right.y,   new_right.z, 0f32],
 			[     new_up.x,      new_up.y,      new_up.z, 0f32],
 			[new_forward.x, new_forward.y, new_forward.z, 0f32],
@@ -458,29 +387,29 @@ fn point_at_matrix(pos:&Vec3d, target:&Vec3d, up:&Vec3d) -> Matrix4x4 {
 
 fn inverse_transformation_matrix(matrix:&Matrix4x4) -> Matrix4x4 {
 	return Matrix4x4 {
-		matrix: [
-			[matrix.matrix[0][0], matrix.matrix[1][0], matrix.matrix[2][0], 0f32],
-			[matrix.matrix[0][1], matrix.matrix[1][1], matrix.matrix[2][1], 0f32],
-			[matrix.matrix[0][2], matrix.matrix[1][2], matrix.matrix[2][2], 0f32],
+		m: [
+			[matrix.m[0][0], matrix.m[1][0], matrix.m[2][0], 0f32],
+			[matrix.m[0][1], matrix.m[1][1], matrix.m[2][1], 0f32],
+			[matrix.m[0][2], matrix.m[1][2], matrix.m[2][2], 0f32],
 			[
-				-(matrix.matrix[3][0] * matrix.matrix[0][0] + matrix.matrix[3][1] * matrix.matrix[0][1] + matrix.matrix[3][2] * matrix.matrix[0][2]),
-				-(matrix.matrix[3][0] * matrix.matrix[1][0] + matrix.matrix[3][1] * matrix.matrix[1][1] + matrix.matrix[3][2] * matrix.matrix[1][2]),
-				-(matrix.matrix[3][0] * matrix.matrix[2][0] + matrix.matrix[3][1] * matrix.matrix[2][1] + matrix.matrix[3][2] * matrix.matrix[2][2]),
+				-(matrix.m[3][0] * matrix.m[0][0] + matrix.m[3][1] * matrix.m[0][1] + matrix.m[3][2] * matrix.m[0][2]),
+				-(matrix.m[3][0] * matrix.m[1][0] + matrix.m[3][1] * matrix.m[1][1] + matrix.m[3][2] * matrix.m[1][2]),
+				-(matrix.m[3][0] * matrix.m[2][0] + matrix.m[3][1] * matrix.m[2][1] + matrix.m[3][2] * matrix.m[2][2]),
 				1f32
 			]
 		]
 	};
 }
 
-fn multiply_vector_matrix(inp:&Vec3d, matrix:&Matrix4x4) -> Vec3d {
-	let mut out = Vec3d {
-		x: inp.x * matrix.matrix[0][0] + inp.y * matrix.matrix[1][0] + inp.z * matrix.matrix[2][0] + matrix.matrix[3][0],
-		y: inp.x * matrix.matrix[0][1] + inp.y * matrix.matrix[1][1] + inp.z * matrix.matrix[2][1] + matrix.matrix[3][1],
-		z: inp.x * matrix.matrix[0][2] + inp.y * matrix.matrix[1][2] + inp.z * matrix.matrix[2][2] + matrix.matrix[3][2],
-		w: inp.x * matrix.matrix[0][3] + inp.y * matrix.matrix[1][3] + inp.z * matrix.matrix[2][3] + matrix.matrix[3][3],
+fn multiply_vector_matrix(inp:&Vec4, matrix:&Matrix4x4) -> Vec4 {
+	let mut out = Vec4 {
+		x: inp.x * matrix.m[0][0] + inp.y * matrix.m[1][0] + inp.z * matrix.m[2][0] + matrix.m[3][0],
+		y: inp.x * matrix.m[0][1] + inp.y * matrix.m[1][1] + inp.z * matrix.m[2][1] + matrix.m[3][1],
+		z: inp.x * matrix.m[0][2] + inp.y * matrix.m[1][2] + inp.z * matrix.m[2][2] + matrix.m[3][2],
+		w: inp.x * matrix.m[0][3] + inp.y * matrix.m[1][3] + inp.z * matrix.m[2][3] + matrix.m[3][3],
 	};
 
-	let w = inp.x * matrix.matrix[0][3] + inp.y * matrix.matrix[1][3] + inp.z * matrix.matrix[2][3] + matrix.matrix[3][3];
+	let w = inp.x * matrix.m[0][3] + inp.y * matrix.m[1][3] + inp.z * matrix.m[2][3] + matrix.m[3][3];
 
 	if w != 0f32 { // TODO: когда w == 0 ?
 		out.x /= w;
@@ -526,8 +455,8 @@ fn load_mesh(mesh:&mut MeshBasic, binary:&[u8]) {
 	let texture_verticies_amount = u8_to_u16(binary[2], binary[3]);
 	mesh.amount_of_triangles = u8_to_u16(binary[4], binary[5]);
 
-	let mut         verticies = [Vec3d::ZERO; 4*1024]; // TODO: dynamic buffer?
-	let mut texture_verticies = [VecUVW::ZERO; 4*1024]; // TODO: dynamic buffer?
+	let mut         verticies = [Vec4::ZERO; 4*1024]; // TODO: dynamic buffer?
+	let mut texture_verticies = [Vec3::ZERO; 4*1024]; // TODO: dynamic buffer?
 
 	let mut offset = 6;
 	for i in 0usize..verticies_amount as usize {
@@ -539,9 +468,9 @@ fn load_mesh(mesh:&mut MeshBasic, binary:&[u8]) {
 		offset += 4;
 	}
 	for i in 0usize..texture_verticies_amount as usize {
-		texture_verticies[i].u = u8_to_f32(binary[offset + 0], binary[offset + 1], binary[offset + 2], binary[offset + 3]);
+		*texture_verticies[i].u() = u8_to_f32(binary[offset + 0], binary[offset + 1], binary[offset + 2], binary[offset + 3]);
 		offset += 4;
-		texture_verticies[i].v = u8_to_f32(binary[offset + 0], binary[offset + 1], binary[offset + 2], binary[offset + 3]);
+		*texture_verticies[i].v() = u8_to_f32(binary[offset + 0], binary[offset + 1], binary[offset + 2], binary[offset + 3]);
 		offset += 4;
 	}
 	for i in 0usize..mesh.amount_of_triangles as usize {
@@ -563,7 +492,15 @@ fn load_mesh(mesh:&mut MeshBasic, binary:&[u8]) {
 fn load_texture(texture:&mut Texture, binary:&[u8]) {
 	texture.resolution_u = u8_to_u16(binary[0], binary[1]);
 	texture.resolution_v = u8_to_u16(binary[2], binary[3]);
-	texture.pixels[0..binary.len()-4].copy_from_slice(&binary[4..binary.len()]);
+
+	for i in 0..(texture.resolution_u as u32 * texture.resolution_v as u32 ) {
+		let pixel = &mut texture.pixels[i as usize];
+		let off = i * 4;
+		pixel.r = binary[(off+0) as usize];
+		pixel.g = binary[(off+1) as usize];
+		pixel.b = binary[(off+2) as usize];
+		pixel.a = binary[(off+3) as usize];
+	}
 }
 
 //void draw_line_unsafe(u8 *screen, s16 x0, s16 y0, s16 x1, s16 y1) {
@@ -594,7 +531,7 @@ fn draw_line_safe(screen:&mut [u8], mut x0:i32, mut y0:i32, x1:i32, y1:i32) {
 
 	loop {
 		if
-		x0 >= 0 && x0 < SCREEN_WIDTH  as i32 &&
+			x0 >= 0 && x0 < SCREEN_WIDTH  as i32 &&
 			y0 >= 0 && y0 < SCREEN_HEIGHT as i32
 		{
 			let offset = (y0 as usize * SCREEN_WIDTH as usize + x0 as usize)*4;
@@ -624,7 +561,7 @@ fn draw_triangle_safe(screen:&mut [u8], triangle:&Triangle) {
 	draw_line_safe(screen, triangle.vertices[1].x as i32, triangle.vertices[1].y as i32, triangle.vertices[2].x as i32, triangle.vertices[2].y as i32);
 }
 
-fn fill_triangle_safe(screen:&mut [u8], triangle:&Triangle, color:&RGB) {
+fn fill_triangle_safe(screen:&mut [RGBA], triangle:&Triangle, color:&RGB) {
 	// TODO: другие алгоритмы
 	unsafe {
 		fill_triangle_1(
@@ -637,15 +574,15 @@ fn fill_triangle_safe(screen:&mut [u8], triangle:&Triangle, color:&RGB) {
 	}
 }
 
-fn texture_triangle_safe(screen:&mut [u8], depth_buffer:&mut [f32], triangle:&Triangle, texture:&Texture) {
+fn texture_triangle_safe(screen:&mut [RGBA], depth_buffer:&mut [f32], triangle:&Triangle, texture:&Texture) {
 	// TODO: другие алгоритмы
 	// texture_triangle_1(
 	texture_triangle_unsafe(
 		screen,
 		depth_buffer,
-		(triangle.vertices[0].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[0].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[0].u, triangle.uvs[0].v, triangle.uvs[0].w, // TODO: rounding / not rounding macro
-		(triangle.vertices[1].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[1].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[1].u, triangle.uvs[1].v, triangle.uvs[1].w,
-		(triangle.vertices[2].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[2].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[2].u, triangle.uvs[2].v, triangle.uvs[2].w,
+		(triangle.vertices[0].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[0].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[0].us(), triangle.uvs[0].vs(), triangle.uvs[0].ws(), // TODO: rounding / not rounding macro
+		(triangle.vertices[1].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[1].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[1].us(), triangle.uvs[1].vs(), triangle.uvs[1].ws(),
+		(triangle.vertices[2].x.round() as i16).clamp(0, SCREEN_WIDTH as i16), (triangle.vertices[2].y.round() as i16).clamp(0, SCREEN_HEIGHT as i16), triangle.uvs[2].us(), triangle.uvs[2].vs(), triangle.uvs[2].ws(),
 		texture,
 	);
 }
@@ -664,16 +601,17 @@ impl RGB {
 }
 
 // Triangle Renderer 1
-unsafe fn draw_line(screen:&mut [u8], y:u16, x0:u16, x1:u16, color:&RGB) {
-	let offset = (y as usize * SCREEN_WIDTH as usize)*4;
+unsafe fn draw_line(screen:&mut [RGBA], y:u16, x0:u16, x1:u16, color:&RGB) {
+	let offset = y as u32 * SCREEN_WIDTH as u32;
 	for i in x0..x1 {
-		*screen.get_unchecked_mut(offset+i as usize*4+0) = color.r;
-		*screen.get_unchecked_mut(offset+i as usize*4+1) = color.g;
-		*screen.get_unchecked_mut(offset+i as usize*4+2) = color.b;
-		*screen.get_unchecked_mut(offset+i as usize*4+3) = 0xFFu8;
+		let screen = screen.get_unchecked_mut((offset + i as u32) as usize);
+		screen.r = color.r;
+		screen.g = color.g;
+		screen.b = color.b;
+		screen.a = 0xFF;
 	}
 }
-unsafe fn fill_bottom_flat_triangle(screen:&mut [u8], ty:i16, by:i16, lx:i16, rx:i16, tx:i16, color:&RGB) {
+unsafe fn fill_bottom_flat_triangle(screen:&mut [RGBA], ty:i16, by:i16, lx:i16, rx:i16, tx:i16, color:&RGB) {
 	debug_assert!(ty <= by);
 	debug_assert!(lx <= tx);
 	debug_assert!(tx <= rx);
@@ -700,7 +638,7 @@ unsafe fn fill_bottom_flat_triangle(screen:&mut [u8], ty:i16, by:i16, lx:i16, rx
 		curx2 += invslope2;
 	}
 }
-unsafe fn fill_top_flat_triangle(screen:&mut [u8], mut ty:i16, mut by:i16, mut lx:i16, mut rx:i16, mut bx:i16, color:&RGB) {
+unsafe fn fill_top_flat_triangle(screen:&mut [RGBA], mut ty:i16, mut by:i16, mut lx:i16, mut rx:i16, mut bx:i16, color:&RGB) {
 	debug_assert!(ty <= by);
 	debug_assert!(lx <= bx);
 	debug_assert!(bx <= rx);
@@ -732,7 +670,7 @@ unsafe fn fill_top_flat_triangle(screen:&mut [u8], mut ty:i16, mut by:i16, mut l
 	}
 }
 
-unsafe fn fill_triangle_1(screen:&mut [u8], mut x1:i16, mut y1:i16, mut x2:i16, mut y2:i16, mut x3:i16, mut y3:i16, color:&RGB) {
+unsafe fn fill_triangle_1(screen:&mut [RGBA], mut x1:i16, mut y1:i16, mut x2:i16, mut y2:i16, mut x3:i16, mut y3:i16, color:&RGB) {
 	// at first sort the three vertices by y-coordinate ascending so v1 is the topmost vertice
 
 	if y2 < y1 {
@@ -886,10 +824,10 @@ unsafe fn fill_triangle_1(screen:&mut [u8], mut x1:i16, mut y1:i16, mut x2:i16, 
 				let tex_u = (((1f32 - t) * tex_su + t * tex_eu) as i16).clamp(0, texture.resolution_u as i16 - 1) as usize;
 				let tex_v = (((1f32 - t) * tex_sv + t * tex_ev) as i16).clamp(0, texture.resolution_v as i16 - 1) as usize;
 
-				screen[4*(i as usize * SCREEN_WIDTH as usize + j as usize) + 0] = texture.pixels[4*(tex_v * texture.resolution_u as usize + tex_u) + 0];
-				screen[4*(i as usize * SCREEN_WIDTH as usize + j as usize) + 1] = texture.pixels[4*(tex_v * texture.resolution_u as usize + tex_u) + 1];
-				screen[4*(i as usize * SCREEN_WIDTH as usize + j as usize) + 2] = texture.pixels[4*(tex_v * texture.resolution_u as usize + tex_u) + 2];
-				screen[4*(i as usize * SCREEN_WIDTH as usize + j as usize) + 3] = texture.pixels[4*(tex_v * texture.resolution_u as usize + tex_u) + 3];
+				screen[i as usize * SCREEN_WIDTH as usize + j as usize].r = texture.pixels[tex_v * texture.resolution_u as usize + tex_u].r;
+				screen[i as usize * SCREEN_WIDTH as usize + j as usize].g = texture.pixels[tex_v * texture.resolution_u as usize + tex_u].g;
+				screen[i as usize * SCREEN_WIDTH as usize + j as usize].b = texture.pixels[tex_v * texture.resolution_u as usize + tex_u].b;
+				screen[i as usize * SCREEN_WIDTH as usize + j as usize].a = texture.pixels[tex_v * texture.resolution_u as usize + tex_u].a;
 				// x = j
 				// y = i
 
@@ -965,19 +903,23 @@ unsafe fn fill_triangle_1(screen:&mut [u8], mut x1:i16, mut y1:i16, mut x2:i16, 
 }*/
 
 #[inline(always)]
-fn Draw(
-	screen:&mut [u8],
+fn draw(
+	screen:&mut [RGBA],
 	texture:&Texture,
 	x:usize, y:usize, u:f32, v:f32,
 ) {
-	screen[4 * (y * SCREEN_WIDTH as usize + x) + 0] = texture.pixels[4 * ((v * texture.resolution_v as f32) as usize * texture.resolution_u as usize + (u * texture.resolution_u as f32) as usize) + 0];
-	screen[4 * (y * SCREEN_WIDTH as usize + x) + 1] = texture.pixels[4 * ((v * texture.resolution_v as f32) as usize * texture.resolution_u as usize + (u * texture.resolution_u as f32) as usize) + 1];
-	screen[4 * (y * SCREEN_WIDTH as usize + x) + 2] = texture.pixels[4 * ((v * texture.resolution_v as f32) as usize * texture.resolution_u as usize + (u * texture.resolution_u as f32) as usize) + 2];
-	screen[4 * (y * SCREEN_WIDTH as usize + x) + 3] = texture.pixels[4 * ((v * texture.resolution_v as f32) as usize * texture.resolution_u as usize + (u * texture.resolution_u as f32) as usize) + 3];
+	let screen = &mut screen[y * SCREEN_WIDTH as usize + x];
+
+	let texture = texture.pixels[
+		(v * texture.resolution_v as f32) as usize * texture.resolution_u as usize +
+		(u * texture.resolution_u as f32) as usize
+	];
+
+	*screen = texture;
 }
 
 fn texture_triangle(
-	screen:&mut [u8],
+	screen:&mut [RGBA],
 	depth_buffer:&mut [f32],
 	mut x1:i16, mut y1:i16, mut u1:f32, mut v1:f32, mut w1:f32,
 	mut x2:i16, mut y2:i16, mut u2:f32, mut v2:f32, mut w2:f32,
@@ -1078,7 +1020,7 @@ fn texture_triangle(
 				tex_w = (1f32 - t) * tex_sw + t * tex_ew;
 				if y >= 0 && x >= 0 && y < SCREEN_HEIGHT as i16 && x < SCREEN_WIDTH as i16 {
 					if tex_w > depth_buffer[y as usize * SCREEN_WIDTH as usize + x as usize] {
-						Draw(screen, texture, x as usize, y as usize, tex_u / tex_w, tex_v / tex_w);
+						draw(screen, texture, x as usize, y as usize, tex_u / tex_w, tex_v / tex_w);
 						depth_buffer[y as usize * SCREEN_WIDTH as usize + x as usize] = tex_w;
 					}
 				}
@@ -1139,7 +1081,7 @@ fn texture_triangle(
 
 				if y >= 0 && x >= 0 && y < SCREEN_HEIGHT as i16 && x < SCREEN_WIDTH as i16 {
 					if tex_w > depth_buffer[y as usize * SCREEN_WIDTH as usize + x as usize] {
-						Draw(screen, texture, x as usize, y as usize, tex_u / tex_w, tex_v / tex_w);
+						draw(screen, texture, x as usize, y as usize, tex_u / tex_w, tex_v / tex_w);
 						depth_buffer[y as usize * SCREEN_WIDTH as usize + x as usize] = tex_w;
 					}
 				}
@@ -1151,36 +1093,34 @@ fn texture_triangle(
 
 #[inline(always)]
 unsafe fn draw_unsafe(
-	screen:&mut [u8],
+	screen:&mut [RGBA],
 	texture:&Texture,
 	pix_idx:usize, uv_idx:usize,
 	depth_buffer:&mut [f32],
 	tex_w:f32
 ) {
-	let a = *texture.pixels.get_unchecked(4 * uv_idx + 3);
-	if a != 0 {
-		*screen.get_unchecked_mut(4 * pix_idx + 0) = *texture.pixels.get_unchecked(4 * uv_idx + 0);
-		*screen.get_unchecked_mut(4 * pix_idx + 1) = *texture.pixels.get_unchecked(4 * uv_idx + 1);
-		*screen.get_unchecked_mut(4 * pix_idx + 2) = *texture.pixels.get_unchecked(4 * uv_idx + 2);
-		*screen.get_unchecked_mut(4 * pix_idx + 3) = 0xFF;
+	let texture = *texture.pixels.get_unchecked(uv_idx);
+	if texture.a != 0 {
+		let screen = screen.get_unchecked_mut(pix_idx);
+		screen.r = texture.r;
+		screen.g = texture.g;
+		screen.b = texture.b;
+		screen.a = 0xFF;
 		*depth_buffer.get_unchecked_mut(pix_idx) = tex_w;
 	}
 }
 
 #[inline(always)]
 fn draw_safe(
-	screen:&mut [u8],
+	screen:&mut [RGBA],
 	texture:&Texture,
 	pix_idx:usize, uv_idx:usize,
 ) {
-	screen[4 * pix_idx + 0] = texture.pixels[4 * uv_idx + 0];
-	screen[4 * pix_idx + 1] = texture.pixels[4 * uv_idx + 1];
-	screen[4 * pix_idx + 2] = texture.pixels[4 * uv_idx + 2];
-	screen[4 * pix_idx + 3] = texture.pixels[4 * uv_idx + 3];
+	screen[pix_idx] = texture.pixels[uv_idx];
 }
 
 fn texture_triangle_unsafe(
-	screen:&mut [u8],
+	screen:&mut [RGBA],
 	depth_buffer:&mut [f32],
 	mut x1:i16, mut y1:i16, mut u1:f32, mut v1:f32, mut w1:f32,
 	mut x2:i16, mut y2:i16, mut u2:f32, mut v2:f32, mut w2:f32,
@@ -1371,29 +1311,29 @@ fn texture_triangle_unsafe(
 	}
 }
 
-fn intersect_vector_plane(plane_p:&Vec3d, plane_n:&Vec3d, line_start:&Vec3d, line_end:&Vec3d) -> (Vec3d, f32) {
+fn intersect_vector_plane(plane_p:&Vec4, plane_n:&Vec4, line_start:&Vec4, line_end:&Vec4) -> (Vec4, f32) {
 	// TODO: let plane_n = normalize(plane_n);
-	let plane_d = -Vec3d::dot_product(&plane_n, &plane_p);
-	let ad = Vec3d::dot_product(line_start, &plane_n);
-	let bd = Vec3d::dot_product(line_end,   &plane_n);
+	let plane_d = -Vec4::dot(&plane_n, &plane_p);
+	let ad = Vec4::dot(line_start, &plane_n);
+	let bd = Vec4::dot(line_end,   &plane_n);
 	let t = (-plane_d -  ad) / (bd - ad);
 	let line_start_to_end = *line_end - *line_start;
 	let line_to_intersect = mul_vec3d(&line_start_to_end, t);
 	return (*line_start + line_to_intersect, t);
 }
 
-fn triangle_clip_against_plane(plane_p:&Vec3d, plane_n:&Vec3d, in_tri:&Triangle) -> (usize, [Triangle;2]) {
+fn triangle_clip_against_plane(plane_p:&Vec4, plane_n:&Vec4, in_tri:&Triangle) -> (usize, [Triangle;2]) {
 	// Make sure plane normal is indeed normal
 	// TODO: let plane_n = normalize(plane_n);
 
 	// Return signed shortest distance from point to plane, plane normal must be normalised
-	fn dist(plane_p:&Vec3d, plane_n:&Vec3d, p:&Vec3d) -> f32 {
-		plane_n.x*p.x + plane_n.y*p.y + plane_n.z*p.z - Vec3d::dot_product(plane_n, plane_p)
+	fn dist(plane_p:&Vec4, plane_n:&Vec4, p:&Vec4) -> f32 {
+		plane_n.x*p.x + plane_n.y*p.y + plane_n.z*p.z - Vec4::dot(plane_n, plane_p)
 	}
 
 	// Create two temporary storage arrays to classify points either side of plane
-	let zv3:Vec3d = Vec3d::ZERO;
-	let zv2:VecUVW = VecUVW::ZERO;
+	let zv3:Vec4 = Vec4::ZERO;
+	let zv2:Vec3 = Vec3::ZERO;
 	let mut  inside_points = [&zv3;3];
 	let mut outside_points = [&zv3;3];
 	let mut  inside_uvs    = [&zv2;3];
@@ -1483,39 +1423,4 @@ fn triangle_clip_against_plane(plane_p:&Vec3d, plane_n:&Vec3d, in_tri:&Triangle)
 		},
 		_ => unreachable!()
 	}
-}
-
-fn projection_matrix(fov_degrees:f32, aspect_ratio:f32, plane_near:f32, plane_far:f32) -> Matrix4x4 {
-	let fov_rad = 1f32 / (fov_degrees * PI / 360f32).tan();
-	let mut matrix = Matrix4x4::zeros();
-	matrix.matrix[0][0] = aspect_ratio * fov_rad;
-	matrix.matrix[1][1] = fov_rad;
-	matrix.matrix[2][2] = plane_far / (plane_far - plane_near);
-	matrix.matrix[3][2] = (-plane_far * plane_near) / (plane_far - plane_near);
-	matrix.matrix[2][3] = 1f32;
-	matrix.matrix[3][3] = 0f32;
-	return matrix;
-}
-
-fn transition_matrix(x:f32, y:f32, z:f32) -> Matrix4x4 {
-	let mut matrix = Matrix4x4::ones_cascade();
-	matrix.matrix[3][0] = x;
-	matrix.matrix[3][1] = y;
-	matrix.matrix[3][2] = z;
-	return matrix;
-}
-
-fn mul_matrix(matrix1:&Matrix4x4, matrix2:&Matrix4x4) -> Matrix4x4 {
-	let mut  matrix = Matrix4x4::zeros();
-	for c in 0..4 {
-		for r in 0..4 {
-			matrix.matrix[r][c] =
-				matrix1.matrix[r][0] * matrix2.matrix[0][c] +
-					matrix1.matrix[r][1] * matrix2.matrix[1][c] +
-					matrix1.matrix[r][2] * matrix2.matrix[2][c] +
-					matrix1.matrix[r][3] * matrix2.matrix[3][c]
-			;
-		}
-	}
-	return matrix;
 }

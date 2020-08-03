@@ -1,11 +1,10 @@
 use core::num::NonZeroU32;
-use crate::rcl_switch::FPS;
 
 const TARGET_FPS:u8 = 100;
-//const TARGET_FPS:u8 = FPS;
 
 // const MAX_TICKS_PER_FRAME:u8 = 4;
-const MAX_TICKS_PER_FRAME:u8 = 8;
+// const MAX_TICKS_PER_FRAME:u8 = 8;
+const MAX_TICKS_PER_FRAME:u8 = 16; // TODO:
 const TARGET_SLEEP:u8 = ((1000f32 / TARGET_FPS as f32)+0.9f32) as u8;
 
 const MAX_DELTA_OVERFLOW_DISTANCE:i32 = -100;

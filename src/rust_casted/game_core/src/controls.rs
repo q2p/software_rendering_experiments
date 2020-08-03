@@ -5,14 +5,12 @@ pub struct Controls {
 	m_prec_x: f32,
 	m_prec_y: f32,
 	pub lmb:Key,
+	pub rmb:Key,
 	pub arrow_up:Key,
 	pub arrow_down:Key,
 	pub arrow_left:Key,
 	pub arrow_right:Key,
 	pub space:Key,
-
-	pub a:Key,
-	pub c:Key,
 }
 
 pub struct Key {
@@ -38,13 +36,12 @@ impl Controls {
 			m_prec_y: screen_height as f32 / 2f32,
 
 			lmb:         Key::new(),
+			rmb:         Key::new(),
 			arrow_up:    Key::new(),
 			arrow_down:  Key::new(),
 			arrow_left:  Key::new(),
 			arrow_right: Key::new(),
 			space:       Key::new(),
-			a:           Key::new(),
-			c:           Key::new(),
 		}
 	}
 
@@ -56,8 +53,9 @@ impl Controls {
 		delta_x:f32,
 		delta_y:f32,
 		scale:f32,
-		mouse_down:bool,
-		mouse_up:bool,
+
+		lmb:bool,
+		rmb:bool,
 
 		vku: bool,
 		vkd: bool,
@@ -81,7 +79,8 @@ impl Controls {
 		self.m_rounded_x = core::cmp::min((self.m_prec_x+0.5f32) as u16, screen_width  - 1);
 		self.m_rounded_y = core::cmp::min((self.m_prec_y+0.5f32) as u16, screen_height - 1);
 
-		self.lmb        .update(mouse_down);
+		self.lmb        .update(lmb);
+		self.rmb        .update(rmb);
 		self.arrow_up   .update(vku);
 		self.arrow_down .update(vkd);
 		self.arrow_left .update(vkl);

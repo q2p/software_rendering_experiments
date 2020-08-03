@@ -18,6 +18,7 @@ const RCL_VERTICAL_FOV:RCL_Unit = RCL_UNITS_PER_SQUARE;
 
 // #include "raycastlib.h"
 use crate::rcl::*;
+use crate::{RGBA, RGB};
 // #include "Pokitto.h"
 // Pokitto::Core pokitto;
 
@@ -35,12 +36,14 @@ const GRAVITY_ACCELERATION:RCL_Unit = ((3 * RCL_UNITS_PER_SQUARE) / 2); // #ifnd
 
 const SCREEN_WIDTH:u8 = 110;
 const SCREEN_HEIGHT:u8 = 88;
-pub(crate) const MIDDLE_ROW:u8 = SCREEN_HEIGHT / 2;
+pub const MIDDLE_ROW:u8 = SCREEN_HEIGHT / 2;
 const MIDDLE_COLUMN:u8 = SCREEN_WIDTH / 2;
 
-const SUBSAMPLE:u8 = 2; // #ifndef SUBSAMPLE
+// was 2
+// const SUBSAMPLE:u8 = 2; // #ifndef SUBSAMPLE
 
-const SUBSAMPLED_WIDTH:u8 = (SCREEN_WIDTH / SUBSAMPLE);
+// was const SUBSAMPLED_WIDTH:u8 = (SCREEN_WIDTH / SUBSAMPLE);
+const SUBSAMPLED_WIDTH:u8 = SCREEN_WIDTH;
 
 const TEXTURE_W:u8 = 32;
 const TEXTURE_H:u8 = 32;
@@ -55,11 +58,16 @@ pub const fn HUE(c:u8) -> u8 { c * 16 + 8 }
 pub fn putSubsampledPixel(screenbuffer: &mut [u8], x:u8, y:u8, color:u8) {
 	let mut offset =
 		y as usize * SCREEN_WIDTH as usize +
-		x as usize * SUBSAMPLE    as usize
+		x as usize
+		// was x as usize * SUBSAMPLE    as usize
 	;
-	for i in 0..SUBSAMPLE {
-		screenbuffer[offset + i as usize] = color;
+	// screenbuffer[offset] = color;
+	if let Some(p) = screenbuffer.get_mut(offset) {
+		*p = color;
 	}
+	// was for i in 0..SUBSAMPLE {
+	// was	screenbuffer[offset + i as usize] = color;
+	// was }
 }
 
 fn encodeHSV(hue:u8, saturation:u8, value:u8) -> u8 {
@@ -77,7 +85,7 @@ fn encodeHSV(hue:u8, saturation:u8, value:u8) -> u8 {
 	}
 }
 
-fn decodeHSV(hsv:u8) -> (u8,u8,u8) {
+const fn decodeHSV(hsv:u8) -> (u8,u8,u8) {
   let topHalf    = hsv & 0b11110000;
   let bottomHalf = hsv & 0b00001111;
 
@@ -95,18 +103,24 @@ fn decodeHSV(hsv:u8) -> (u8,u8,u8) {
 }
 
 // Personal: hue = 0..224; saturation = ..; value = ..
-fn convertHSVtoRGB(hue:u8, saturation:u8, value:u8) -> (u8,u8,u8) {
+const fn convertHSVtoRGB(hue:u8, saturation:u8, value:u8) -> RGB {
 	// adds precision
   const M:u8 = 16;
 
-  let chroma:u16 = (value as u16 * saturation as u16) / 256;
+	// 0..255 * 0..255 / 256 <= 0..254;
+  let chroma = ((value as u16 * saturation as u16) / 256) as u8;
 
-	// 224 * 16 / 42 = 85
+	// 0..224 * 16 / 42 ==> 0..85
   let h = ((hue as u16 * M as u16) / 42) as u8;
 
-  let a:u8 = ((h as i8 % (2 * M as i8)) - M as i8).abs();
+	// (0..224 % (2*16)) - 16 => 0..31 - 16 => -16..15
+	// abs(-16..15) => 0..16
+	// 0..16
+  let a = ((h % (2 * M)) as i8 - M as i8).abs() as u8;
 
-  let x:i32 = (chroma as i16 * (M as i16 - a as i16)) / M as i16;
+	// (254 * (16 - 0..16)) / 16 ==> (254 * 0..16) / 16 ==> 0..4064 / 16 => 0..254
+	// 0..254
+  let x = ((chroma as u16 * (M - a) as u16) / M as u16) as u8;
 
 	let mut r = 0;
 	let mut g = 0;
@@ -126,22 +140,25 @@ fn convertHSVtoRGB(hue:u8, saturation:u8, value:u8) -> (u8,u8,u8) {
 	g = (g as i16 + m as i16) as u8;
 	b = (b as i16 + m as i16) as u8;
 
-	return (r, g, b);
+	return RGB { r, g, b };
 }
 
 /// Inits and loads a general 256 color palette.
-fn initPalette() -> [[u8;3];256] {
-	let mut palette:[[u8;3];256] = [[0;3];256]; // was unsigned short
+const fn initPalette() -> [RGB;256] {
+	let mut palette:[RGB;256] = [RGB::zeroed();256]; // was unsigned short
 
   // the palette is HSV-based because it makes brightness addition fast, which is important for fog/shadow diminishing
-	for i in 0..256 {
+	// TODO: replace with "for i in 0..256 {" when `for` in `const_fn` becomes stable
+	let mut i:u16 = 0;
+	while i < 256 {
 		let mut r = 0;
 		let mut g = 0;
 		let mut b = 0;
 
-    let (h, s, v) = decodeHSV(i);
-    let (r, g, b) = convertHSVtoRGB(h,s,v);
-    palette[i as usize] = [r,g,b];
+    let (h, s, v) = decodeHSV(i as u8);
+    palette[i as usize] = convertHSVtoRGB(h,s,v);
+
+		i += 1;
   }
 
 	return palette;
@@ -199,11 +216,11 @@ pub fn sampleImage(image:&[u8], mut x:RCL_Unit, mut y:RCL_Unit) -> u8 {
 }
 
 pub struct Screen {
-	pallete:[[u8;3];256],
+	pallete:[RGB;256],
 	data:[[u8; SCREEN_WIDTH as usize]; SCREEN_HEIGHT as usize],
 }
 impl Screen {
-	pub fn new() -> Screen {
+	pub const fn new() -> Screen {
 		Screen {
 			pallete: initPalette(),
 			data: [[0; SCREEN_WIDTH as usize]; SCREEN_HEIGHT as usize]
@@ -211,7 +228,7 @@ impl Screen {
 	}
 
 	#[inline]
-	pub const fn drawPixel(&mut self, x:i16, y:i16, color:u8) {
+	pub fn drawPixel(&mut self, x:i16, y:i16, color:u8) {
 		// TODO: personal: is check nescessary?
 		if
 			x >= 0 && x < SCREEN_WIDTH  as i16 &&
@@ -221,15 +238,16 @@ impl Screen {
 		}
 	}
 
-	pub fn project(&self, image:&mut [u8]) {
+	pub fn project(&self, image:&mut [RGBA]) {
 		for y in 0..SCREEN_HEIGHT {
+			let yoff = y as u16 * SCREEN_WIDTH as u16;
 			for x in 0..SCREEN_WIDTH {
 				let c = self.pallete[self.data[y as usize][x as usize] as usize];
-				let offset = (y*SCREEN_WIDTH + x)*4;
-				image[offset as usize + 0] = c[0];
-				image[offset as usize + 1] = c[1];
-				image[offset as usize + 2] = c[2];
-				image[offset as usize + 3] = 255;
+				let image = &mut image[(yoff + x as u16) as usize];
+				image.r = c.r;
+				image.g = c.g;
+				image.b = c.b;
+				image.a = 0xFF;
 			}
 		}
 	}
@@ -242,7 +260,7 @@ fn drawImage(screen:&mut Screen, image:&[u8], x:u8, y:u8) {
     let column = 2 + i * image[1];
 
     for j in 0..image[1] {
-      let c = image[column + j];
+      let c = image[(column + j) as usize];
 
       if c != TRANSPARENT_COLOR {
         screen.drawPixel(xPos as i16, (y + j) as i16, image[(column + j) as usize]);
@@ -264,13 +282,14 @@ pub struct Player {
   pub mHeadBobUp:bool,
 }
 impl Player {
-  pub fn new() -> Player {
+  pub const fn new() -> Player {
 		Player {
 			mCamera: RCL_Camera {
 				position: RCL_Vector2D::ZERO,
 				direction: 0,
 				resolution: RCL_Vector2D {
-					x: SCREEN_WIDTH as RCL_Unit / SUBSAMPLE as RCL_Unit,
+					// was x: SCREEN_WIDTH as RCL_Unit / SUBSAMPLE as RCL_Unit,
+					x: SCREEN_WIDTH  as RCL_Unit,
 					y: SCREEN_HEIGHT as RCL_Unit,
 				},
 				shear: 0,
@@ -319,7 +338,7 @@ impl Player {
       moveOffset.x = (moveOffset.x * horizontalStep) / RCL_UNITS_PER_SQUARE;
       moveOffset.y = (moveOffset.y * horizontalStep) / RCL_UNITS_PER_SQUARE;
 
-      self.mHeadBob += if self.mHeadBobUp { HEAD_BOB_STEP as RCL_Unit } else { -HEAD_BOB_STEP as RCL_Unit };
+      self.mHeadBob += if self.mHeadBobUp { HEAD_BOB_STEP as RCL_Unit } else { -(HEAD_BOB_STEP as RCL_Unit) };
 
       if self.mHeadBob > HEAD_BOB_HEIGHT {
 				self.mHeadBobUp = false;
@@ -337,7 +356,7 @@ impl Player {
 
     let prevHeight = self.mCamera.height;
 
-    renderer.RCL_moveCameraWithCollision(&mut self.mCamera,moveOffset,self.mVericalSpeed, floorHeightFunction, ceilingHeightFunction, computeHeight, false);
+    renderer.RCL_moveCameraWithCollision(&mut self.mCamera,moveOffset,self.mVericalSpeed, computeHeight, false);
 
     let heightDiff = self.mCamera.height - prevHeight;
 
@@ -376,31 +395,27 @@ impl Sprite {
 			mImage: image,
 			mPixelSize: pixelSize,
 			mPosition:RCL_Vector2D {
-				x: squareX * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2,
-				y: squareY * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2,
+				x: squareX as RCL_Unit * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2,
+				y: squareY as RCL_Unit * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2,
 			},
 			mHeight: z * RCL_UNITS_PER_SQUARE + RCL_UNITS_PER_SQUARE / 2,
-		}
-  }
-
-	pub fn Sprite() -> Sprite {
-		Sprite {
-			mImage: 0,
-			mHeight: 0,
-			mPixelSize: 1,
-			mPosition: RCL_Vector2D::ZERO,
 		}
   }
 }
 
 pub struct RCL_General {
 	/// 1D z-buffer for visibility determination.
-	zBuffer:[RCL_Unit; SUBSAMPLED_WIDTH as usize],
+	// was pub screenBuffer:[u8; (SCREEN_WIDTH as u16 * SCREEN_HEIGHT as u16 * SUBSAMPLE as u16) as usize],
+	pub screenBuffer:[u8; (SCREEN_WIDTH as u16 * SCREEN_HEIGHT as u16) as usize],
+	pub zBuffer:[RCL_Unit; SUBSAMPLED_WIDTH as usize],
 	pub defaultConstraints:RCL_RayConstraints,
 }
 impl RCL_General {
-	pub fn new() -> RCL_General {
+	pub const fn new() -> RCL_General {
 		RCL_General {
+			// was screenBuffer: [0; (SCREEN_WIDTH as u16 * SCREEN_HEIGHT as u16 * SUBSAMPLE as u16) as usize],
+			screenBuffer: [0; (SCREEN_WIDTH as u16 * SCREEN_HEIGHT as u16) as usize],
+			zBuffer: [0; SUBSAMPLED_WIDTH as usize],
 			defaultConstraints: RCL_RayConstraints { maxHits: 0, maxSteps: 0 },
 		}
 	}
@@ -415,7 +430,7 @@ impl RCL_General {
 		self.defaultConstraints.init();
 
 		for i in 0..SUBSAMPLED_WIDTH {
-			self.zBuffer[i] = 0;
+			self.zBuffer[i as usize] = 0;
 		}
 	}
 
@@ -441,7 +456,7 @@ impl RCL_General {
 		x -= (size / 2) as i16;
 		y -= (size / 2) as i16;
 
-		let c:u8;
+		let mut c:u8;
 
 		let jTo:i16 = size as i16 - core::cmp::max(0,y + size as i16 - 88 );
 		let iTo:i16 = size as i16 - core::cmp::max(0,x + size as i16 - 110);
@@ -450,11 +465,12 @@ impl RCL_General {
 		while (i as i16) < iTo {
 			let xPos = x + i as i16;
 
-			if self.zBuffer[(xPos / SUBSAMPLE as i16) as usize] <= depth {
+			// was if self.zBuffer[(xPos / SUBSAMPLE as i16) as usize] <= depth {
+			if self.zBuffer[xPos as usize] <= depth {
 				continue;
 			}
 
-			let columnLocation:i16 = 2 + samplingIndices[i as usize] * sprite[0];
+			let columnLocation = 2 + samplingIndices[i as usize] * sprite[0] as u16;
 
 			let mut j = core::cmp::max(-y,0);
 			while j < jTo {
@@ -480,13 +496,13 @@ fn computeAverageColor(texture:&'static[u8], excludeColor:Option<i16>) -> u8 {
   let mut count:u32 = 0;
 
   for i in 0..pixels {
-    let color = texture[2 + i];
+    let color = texture[(2 + i) as usize];
 
-    if color == excludeColor {
+    if color as i16 == excludeColor {
       continue;
 		}
 
-		let (h,s,v) = decodeHSV(texture[2 + i]);
+		let (h,s,v) = decodeHSV(color);
 
     sumH += h as u32;
     sumS += s as u32;
